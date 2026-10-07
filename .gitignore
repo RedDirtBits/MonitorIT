@@ -19,3 +19,8 @@ snapshot.md
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Profiles hold internal IPs and device names; keep them out of version control
+# except the sample. Must be "profiles/*" (not "profiles/") for the ! exception to work.
+profiles/*
+!profiles/sample_profile.json

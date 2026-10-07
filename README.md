@@ -148,7 +148,96 @@ Profiles are stored as standard JSON files inside the `profiles/` directory:
 }
 ```
 
-- **Backup:** Copy the `profiles/` folder to back up host lists.
+- **Backup:** Copy the `profiles/` folder to back up host lists. Profiles other than `sample_profile.json` are deliberately excluded from Git (see [Version Control](#version-control-git)), so Git is **not** a backup for them.
 - **Restore:** Paste JSON profiles into `profiles/` and select them from the top bar dropdown menu.
 - **Profile names:** Characters Windows does not allow in filenames (`\ / : * ? " < > |`) are replaced with `_` when saving, and the dashboard shows the name actually used.
 - **Default profile:** `sample_profile.json` is loaded automatically at startup.
+
+## Version Control (Git)
+
+The project is a **local-only** Git repository (no remote), used to track changes to the app and roll back if something breaks. Commits use the GitHub noreply address `673674+RedDirtBits@users.noreply.github.com`, which is set for this repository only.
+
+### What Is and Isn't Tracked
+
+| Tracked | Ignored (see `.gitignore`) |
+|---|---|
+| `app/` source, `LaunchIT.bat`, docs, `requirements.txt` | `python/` portable runtime (64 MB of binaries; reinstallable) |
+| `profiles/sample_profile.json` | All other `profiles/*.json` (internal IPs and device names) |
+| `.gitignore`, `snapshot_v3.py`, `monitorit_project.ps1` | `venv/`, `__pycache__/`, `snapshot.md`, editor folders |
+
+### First-Time Setup on a New Machine
+
+If you copy the project folder (including the hidden `.git` folder) to another PC, set the identity and line-ending behavior for this repository once:
+
+```powershell
+cd MonitorIT
+git config user.name "RedDirt"
+git config user.email "673674+RedDirtBits@users.noreply.github.com"
+git config core.autocrlf false
+```
+
+The files use Windows (CRLF) line endings and are stored that way in the repository. `core.autocrlf false` stops Git from converting them, which would otherwise make every line of a file show as changed.
+
+### Everyday Workflow
+
+```powershell
+git status                      # What has changed since the last commit?
+git diff                        # Show the exact line changes
+git add -A                      # Stage all changes (new, modified, deleted files)
+git commit -m "Describe what changed and why"
+git log --oneline               # List commits, newest first
+```
+
+Commit after each working change, so there is always a known-good point to return to.
+
+### Undoing Mistakes
+
+```powershell
+# Throw away uncommitted edits to one file (restore it from the last commit)
+git restore app/main.py
+
+# Throw away ALL uncommitted edits (cannot be undone)
+git restore .
+
+# Unstage a file you added by mistake (keeps your edits)
+git restore --staged app/main.py
+
+# See what a past commit changed
+git show <commit-id>
+
+# Bring back one file as it was in an earlier commit
+git checkout <commit-id> -- app/static/app.js
+
+# Undo a whole commit by adding a new commit that reverses it (history is kept)
+git revert <commit-id>
+```
+
+`<commit-id>` is the short code shown by `git log --oneline` (e.g., `5056c60`).
+
+### Trying Risky Changes on a Branch
+
+```powershell
+git switch -c experiment        # Create and switch to a new branch
+# ...edit, test, commit as usual...
+git switch main                 # Back to the working version (experiment is untouched)
+git merge experiment            # Keep the experiment's changes, or...
+git branch -D experiment        # ...throw the experiment away
+```
+
+### Marking Known-Good Versions
+
+```powershell
+git tag v1.0 -m "Used during maintenance window"
+git tag                         # List tags
+git checkout v1.0 -- .          # Restore every tracked file to that version
+```
+
+### Tracking a New Profile Anyway
+
+Profiles are ignored by default. To version a specific profile that contains nothing sensitive, add an exception line to `.gitignore` below the existing ones:
+
+```gitignore
+!profiles/My_Profile.json
+```
+
+> **Before ever pushing this repository to GitHub:** the first commit (`c123f8d`) contains two work profiles from before they were ignored. Ignoring a file does not remove it from earlier commits, so those must be scrubbed from history before any push.
