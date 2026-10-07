@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MonitorIT - Network Operations Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="top-bar">
+            <div class="brand">
+                <span class="brand-title">MonitorIT</span>
+                <span class="brand-subtitle">Route Maintenance & Host Monitor</span>
+            </div>
+
+            <div class="controls-group">
+                <div class="control-item">
+                    <label for="profileSelect">Profile:</label>
+                    <select id="profileSelect" class="input-select"></select>
+                </div>
+                <button id="btnLoadProfile" class="btn btn-secondary">Load</button>
+                <button id="btnSaveProfile" class="btn btn-secondary">Save</button>
+                <button id="btnSaveProfileAs" class="btn btn-secondary">Save As...</button>
+                <button id="btnOpenImport" class="btn btn-primary">+ Add / Import Hosts</button>
+            </div>
+        </header>
+
+        <!-- Interval Configuration Bar -->
+        <section class="toolbar">
+            <div class="toolbar-section">
+                <span class="toolbar-label">Ping Interval:</span>
+                <div class="button-group" id="pingIntervalGroup">
+                    <button class="btn-toggle active" data-value="3">3s</button>
+                    <button class="btn-toggle" data-value="5">5s</button>
+                    <button class="btn-toggle" data-value="10">10s</button>
+                </div>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="toolbar-section">
+                <span class="toolbar-label">Traceroute Interval:</span>
+                <div class="button-group" id="tracerouteIntervalGroup">
+                    <button class="btn-toggle active" data-value="1">1s</button>
+                    <button class="btn-toggle" data-value="3">3s</button>
+                    <button class="btn-toggle" data-value="5">5s</button>
+                </div>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="toolbar-section status-summary">
+                <span>Active Hosts: <strong id="statTotalHosts">0</strong></span>
+                <span>Online: <strong id="statOnlineHosts" class="text-success">0</strong></span>
+                <span>Offline: <strong id="statOfflineHosts" class="text-danger">0</strong></span>
+                <span>WS Status: <strong id="wsStatusBadge" class="badge badge-offline">Connecting...</strong></span>
+            </div>
+        </section>
+
+        <!-- Main Workspace Grid & Dual Route Drawer -->
+        <main class="workspace">
+            <!-- Left/Main: Host Ping Table -->
+            <section class="panel host-panel">
+                <div class="panel-header">
+                    <h2>Monitored Hosts</h2>
+                    <input type="text" id="hostFilterInput" class="input-search" placeholder="Filter hosts by IP or Name...">
+                </div>
+                <div class="table-container">
+                    <table id="hostTable">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>IP Address</th>
+                                <th>Friendly Name</th>
+                                <th>RTT (ms)</th>
+                                <th>Sent</th>
+                                <th>Recv</th>
+                                <th>Loss %</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hostTableBody">
+                            <tr>
+                                <td colspan="8" class="text-center text-muted">No hosts loaded. Click "+ Add / Import Hosts" to add targets.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Right: Live Dual Route Monitor Drawer -->
+            <section class="panel traceroute-panel">
+                <div class="panel-header">
+                    <h2>Live Route Monitor (Dual Target)</h2>
+                    <div class="traceroute-header-controls">
+                        <button id="btnToggleAudio" class="btn btn-secondary btn-sm" title="Toggle Route Change Audio Alert">🔊 Audio: ON</button>
+                    </div>
+                </div>
+
+                <!-- Empty Placeholder when no routes active -->
+                <div id="tracerouteEmptyState" class="empty-state">
+                    <p class="text-muted text-center">Select any host and click <strong>"Monitor Route"</strong> to spawn a continuous live traceroute.<br><br>Supports up to 2 active simultaneous targets stacked vertically.</p>
+                </div>
+
+                <!-- Slot 1 Container -->
+                <div id="tracerouteSlot1" class="traceroute-card hidden">
+                    <div class="slot-header">
+                        <div class="slot-title">
+                            <span class="badge badge-active">SLOT 1</span>
+                            <strong id="slot1IpDisplay">None</strong>
+                        </div>
+                        <div class="slot-actions">
+                            <button id="btnLockBaselineSlot1" class="btn btn-warning btn-sm">Lock Base</button>
+                            <button id="btnStopSlot1" class="btn btn-danger btn-sm">Stop</button>
+                        </div>
+                    </div>
+                    <div id="routeAlertSlot1" class="alert-banner hidden">
+                        <strong>SLOT 1: PATH CHANGE DETECTED</strong>
+                        <span id="routeAlertDetailsSlot1">Route topology changed.</span>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Hop</th>
+                                    <th>Router IP</th>
+                                    <th>RTT</th>
+                                    <th>Baseline</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tracerouteTableBodySlot1"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Slot 2 Container -->
+                <div id="tracerouteSlot2" class="traceroute-card hidden">
+                    <div class="slot-header">
+                        <div class="slot-title">
+                            <span class="badge badge-active">SLOT 2</span>
+                            <strong id="slot2IpDisplay">None</strong>
+                        </div>
+                        <div class="slot-actions">
+                            <button id="btnLockBaselineSlot2" class="btn btn-warning btn-sm">Lock Base</button>
+                            <button id="btnStopSlot2" class="btn btn-danger btn-sm">Stop</button>
+                        </div>
+                    </div>
+                    <div id="routeAlertSlot2" class="alert-banner hidden">
+                        <strong>SLOT 2: PATH CHANGE DETECTED</strong>
+                        <span id="routeAlertDetailsSlot2">Route topology changed.</span>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Hop</th>
+                                    <th>Router IP</th>
+                                    <th>RTT</th>
+                                    <th>Baseline</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tracerouteTableBodySlot2"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Import Modal -->
+    <div id="importModal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Add / Import Target Hosts</h3>
+                <button id="btnCloseImport" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted">Paste IP addresses, hostnames, PingInfoView tabbed lines, or CIDR blocks (e.g., <code>198.51.100.0/28</code>) below:</p>
+                <textarea id="importTextarea" class="input-textarea" rows="10" placeholder="10.0.0.1 Core-Switch-01&#10;10.0.0.2, Edge-Router-02&#10;198.51.100.0/28"></textarea>
+                <div class="import-mode-selector">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="chkAppendHosts" checked>
+                        <span>Append to active host list (Uncheck to replace entire list)</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnCancelImport" class="btn btn-secondary">Cancel</button>
+                <button id="btnProcessImport" class="btn btn-primary">Add / Process Hosts</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
