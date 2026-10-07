@@ -11,7 +11,17 @@ let slot2Ip = null;
 
 let pingInterval = 3;
 let tracerouteInterval = 1;
+let downThreshold = 2;
 let audioMuted = localStorage.getItem('monitorit_audio_muted') === 'true';
+
+// Event log state (events kept oldest first; rendered newest first)
+const MAX_EVENTS_SHOWN = 500;
+let eventItems = [];
+let eventLogCollapsed = false;
+let unseenAlerts = 0;
+try {
+    eventLogCollapsed = localStorage.getItem('monitorit_eventlog_collapsed') === 'true';
+} catch (e) { /* storage unavailable */ }
 
 // Helper to escape HTML characters in input values
 function escapeHtml(str) {
@@ -105,9 +115,19 @@ const tracerouteTableBodySlot2 = document.getElementById('tracerouteTableBodySlo
 const importModal = document.getElementById('importModal');
 const importTextarea = document.getElementById('importTextarea');
 
+const eventLog = document.getElementById('eventLog');
+const eventLogHeader = document.getElementById('eventLogHeader');
+const eventLogChevron = document.getElementById('eventLogChevron');
+const eventLogUnseen = document.getElementById('eventLogUnseen');
+const eventLogUnsaved = document.getElementById('eventLogUnsaved');
+const eventLogFile = document.getElementById('eventLogFile');
+const eventFilterSelect = document.getElementById('eventFilterSelect');
+const eventTableBody = document.getElementById('eventTableBody');
+
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
     updateAudioButtonState();
+    applyEventLogCollapsed();
     fetchProfiles();
     connectWebSocket();
     setupEventListeners();
@@ -146,6 +166,10 @@ function connectWebSocket() {
             handlePingUpdate(data.hosts);
         } else if (data.type === 'traceroute_update') {
             handleTracerouteUpdate(data);
+        } else if (data.type === 'event_history') {
+            handleEventHistory(data);
+        } else if (data.type === 'events') {
+            handleNewEvents(data);
         }
     };
 
@@ -177,6 +201,33 @@ function setupEventListeners() {
     setupToggleGroup('tracerouteIntervalGroup', (val) => {
         tracerouteInterval = parseInt(val);
         updateIntervalConfig();
+    });
+
+    setupToggleGroup('downThresholdGroup', (val) => {
+        downThreshold = parseInt(val);
+        updateIntervalConfig();
+    });
+
+    // Event log strip: header toggles collapse; its controls do not
+    eventLogHeader.addEventListener('click', () => {
+        eventLogCollapsed = !eventLogCollapsed;
+        try {
+            localStorage.setItem('monitorit_eventlog_collapsed', eventLogCollapsed ? 'true' : 'false');
+        } catch (e) { /* storage unavailable */ }
+        applyEventLogCollapsed();
+    });
+    document.querySelector('.event-log-controls').addEventListener('click', (e) => e.stopPropagation());
+
+    eventFilterSelect.addEventListener('change', renderEventLog);
+
+    document.getElementById('btnExportEvents').addEventListener('click', () => {
+        window.location.href = '/api/events/export';
+    });
+
+    document.getElementById('btnClearEvents').addEventListener('click', async () => {
+        if (!confirm("Clear the on-screen event log?\n\nThe daily CSV files in the logs folder are not affected.")) return;
+        const res = await fetch('/api/events/clear', { method: 'POST' });
+        if (!res.ok) await alertApiError(res, 'Clearing event log');
     });
 
     document.getElementById('btnLoadProfile').addEventListener('click', () => {
@@ -265,7 +316,7 @@ async function loadProfile(profileName) {
             // Clear active traceroute slots on profile change
             setSlot(1, null);
             setSlot(2, null);
-            setIntervalToggles(data.ping_interval, data.traceroute_interval);
+            setIntervalToggles(data.ping_interval, data.traceroute_interval, data.down_threshold);
 
             fetchProfiles();
         } else {
@@ -281,6 +332,7 @@ async function saveProfile(profileName) {
         profile_name: profileName,
         ping_interval: pingInterval,
         traceroute_interval: tracerouteInterval,
+        down_threshold: downThreshold,
         hosts: loadedHosts.map(h => ({ ip: h.ip, name: h.name, group: h.group || 'Default' }))
     };
 
@@ -391,7 +443,11 @@ async function updateIntervalConfig() {
         const res = await fetch('/api/config/intervals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ping_interval: pingInterval, traceroute_interval: tracerouteInterval })
+            body: JSON.stringify({
+                ping_interval: pingInterval,
+                traceroute_interval: tracerouteInterval,
+                down_threshold: downThreshold
+            })
         });
         if (!res.ok) await alertApiError(res, 'Updating intervals');
     } catch (e) {
@@ -493,11 +549,15 @@ function setToggleGroupValue(groupId, value) {
     });
 }
 
-function setIntervalToggles(ping, traceroute) {
+function setIntervalToggles(ping, traceroute, threshold) {
     pingInterval = ping;
     tracerouteInterval = traceroute;
     setToggleGroupValue('pingIntervalGroup', ping);
     setToggleGroupValue('tracerouteIntervalGroup', traceroute);
+    if (threshold !== undefined) {
+        downThreshold = threshold;
+        setToggleGroupValue('downThresholdGroup', threshold);
+    }
 }
 
 // Server is the source of truth for slots and intervals; this keeps a refreshed page
@@ -511,7 +571,7 @@ function handleStateSync(data) {
             fetchProfiles();
         }
     }
-    setIntervalToggles(data.ping_interval, data.traceroute_interval);
+    setIntervalToggles(data.ping_interval, data.traceroute_interval, data.down_threshold);
 
     const prevSlots = [slot1Ip, slot2Ip];
     setSlot(1, data.slots['1'] || null);
@@ -562,7 +622,14 @@ function handlePingUpdate(hosts) {
 
 function statusBadgeHtml(h) {
     if (h.status === 'Online') return `<span class="badge badge-online">Online</span>`;
-    if (h.status === 'Offline') return `<span class="badge badge-offline">Offline</span>`;
+    if (h.status === 'Offline') {
+        const since = h.down_since ? ` title="Down since ${escapeHtml(h.down_since)}"` : '';
+        return `<span class="badge badge-offline"${since}>Offline</span>`;
+    }
+    if (h.status === 'Timeout') {
+        const tip = `${h.consecutive_failures} of ${downThreshold} failed pings before Offline`;
+        return `<span class="badge badge-warning" title="${tip}">Timeout</span>`;
+    }
     return `<span class="badge badge-idle">Pending</span>`;
 }
 
@@ -777,3 +844,91 @@ function handleTracerouteUpdate(data) {
         targetBody.appendChild(tr);
     });
 }
+
+// Event Log Strip
+function applyEventLogCollapsed() {
+    eventLog.classList.toggle('collapsed', eventLogCollapsed);
+    eventLogChevron.innerHTML = eventLogCollapsed ? '&#9656;' : '&#9662;';
+    if (!eventLogCollapsed) {
+        unseenAlerts = 0;
+        updateEventLogBadges();
+    }
+}
+
+function updateEventLogBadges(unsaved) {
+    eventLogUnseen.textContent = unseenAlerts;
+    eventLogUnseen.classList.toggle('hidden', unseenAlerts === 0);
+
+    if (unsaved !== undefined) {
+        eventLogUnsaved.textContent = unsaved > 0
+            ? `\u26A0 ${unsaved} event(s) not yet saved to disk (is the log file open in Excel?)`
+            : '';
+        eventLogUnsaved.classList.toggle('hidden', !unsaved);
+    }
+}
+
+function handleEventHistory(data) {
+    eventItems = data.events || [];
+    if (data.log_file) {
+        eventLogFile.textContent = `Saving to ${data.log_file.replace(/\//g, '\\')}`;
+    }
+    updateEventLogBadges(data.unsaved);
+    renderEventLog();
+}
+
+function handleNewEvents(data) {
+    eventItems.push(...data.events);
+    if (eventItems.length > MAX_EVENTS_SHOWN * 2) {
+        eventItems = eventItems.slice(-MAX_EVENTS_SHOWN);
+    }
+    if (eventLogCollapsed) {
+        unseenAlerts += data.events.filter(e => e.severity !== 'info').length;
+    }
+    updateEventLogBadges(data.unsaved);
+    renderEventLog();
+}
+
+function eventMatchesFilter(e, filter) {
+    if (filter === 'alerts') return e.severity !== 'info';
+    if (filter === 'host') return e.type.startsWith('host_');
+    if (filter === 'route') {
+        return e.type.startsWith('route_') || e.type.startsWith('baseline_') || e.type.startsWith('trace_');
+    }
+    return true;
+}
+
+const SEVERITY_BADGES = {
+    critical: 'badge-offline',
+    warning: 'badge-warning',
+    success: 'badge-online',
+    info: 'badge-idle'
+};
+
+function renderEventLog() {
+    const filter = eventFilterSelect.value;
+    const shown = [];
+    for (let i = eventItems.length - 1; i >= 0 && shown.length < MAX_EVENTS_SHOWN; i--) {
+        if (eventMatchesFilter(eventItems[i], filter)) shown.push(eventItems[i]);
+    }
+
+    if (shown.length === 0) {
+        eventTableBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">No events yet.</td></tr>`;
+        return;
+    }
+
+    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+    eventTableBody.innerHTML = shown.map(e => {
+        // Earlier days show the date too
+        const time = e.ts.startsWith(today) ? e.ts.slice(11) : e.ts;
+        const host = e.ip
+            ? (e.name && e.name !== e.ip ? `${escapeHtml(e.name)} (${escapeHtml(e.ip)})` : escapeHtml(e.ip))
+            : '';
+        const badge = SEVERITY_BADGES[e.severity] || 'badge-idle';
+        return `<tr class="event-${escapeHtml(e.severity)}">
+            <td title="${escapeHtml(e.ts)}">${escapeHtml(time)}</td>
+            <td><span class="badge ${badge}">${escapeHtml(e.severity)}</span></td>
+            <td>${host}</td>
+            <td class="event-message">${escapeHtml(e.message)}</td>
+        </tr>`;
+    }).join('');
+}

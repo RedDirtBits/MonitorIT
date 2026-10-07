@@ -68,3 +68,10 @@ This document serves as an operational record for tracking errors, unexpected be
 
 * **Cause:** After import, MonitorIT lists every line it could not use: unresolvable hostnames, duplicates, IPv6 entries, or subnets larger than `/22`.
 * **Solution:** Check DNS for the listed names (`nslookup <name>`), enter the IP directly, or split large subnets into `/22` or smaller blocks.
+
+### 5. "Event(s) not yet saved to disk" Warning in the Event Log
+
+* **Cause:** A daily log file (`logs\MonitorIT_events_YYYY-MM-DD.csv`) is open in Excel, which locks it so MonitorIT cannot append to it. The console also prints `[Event Log] Cannot write ...`.
+* **Impact:** None while MonitorIT keeps running. Events are still shown on screen and are held in memory, then written automatically (retried every ping round) once the file is closed. Events still held when the server is stopped are lost.
+* **Solution:** Close the file in Excel. To review a log during monitoring, open a copy of the file or use **Export CSV** in the Event Log strip instead.
+

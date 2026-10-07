@@ -385,6 +385,7 @@ tr.selected {
 .badge-offline { background-color: #3e1f28; color: var(--color-danger); border: 1px solid #5c2c3a; }
 .badge-idle { background-color: var(--bg-overlay); color: var(--text-muted); }
 .badge-active { background-color: #1a334d; color: var(--color-primary); border: 1px solid #274d73; }
+.badge-warning { background-color: #4a340e; color: var(--color-warning); border: 1px solid #845e19; }
 
 .text-success { color: var(--color-success); }
 .text-danger { color: var(--color-danger); }
@@ -500,3 +501,88 @@ tr.hop-changed {
     color: var(--color-warning);
     font-weight: bold;
 }
+
+/* Collapsible Event Log Strip (bottom of host panel) */
+.event-log {
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+}
+
+.event-log-header {
+    background-color: var(--bg-surface);
+    padding: 6px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.event-log-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.event-log-title h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.event-log-chevron {
+    color: var(--text-muted);
+    width: 10px;
+    display: inline-block;
+}
+
+.event-log-unsaved {
+    font-size: 11px;
+}
+
+.event-log-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: default;
+}
+
+.event-log-file {
+    font-size: 11px;
+    font-family: var(--font-mono);
+}
+
+/* Drag the bottom-right corner to resize */
+.event-log-body {
+    height: 180px;
+    min-height: 80px;
+    max-height: 60vh;
+    overflow: auto;
+    resize: vertical;
+    border-top: 1px solid var(--color-border);
+}
+
+.event-log.collapsed .event-log-body {
+    display: none;
+}
+
+.event-log-body .col-time { width: 140px; }
+.event-log-body .col-severity { width: 80px; }
+.event-log-body .col-host { width: 260px; }
+
+.event-log-body td {
+    padding: 4px 10px;
+    white-space: nowrap;
+}
+
+.event-log-body td.event-message {
+    white-space: normal;
+    font-family: var(--font-sans);
+}
+
+tr.event-critical td.event-message { color: var(--color-danger); font-weight: 600; }
+tr.event-warning td.event-message { color: var(--color-warning); }
+tr.event-success td.event-message { color: var(--color-success); }

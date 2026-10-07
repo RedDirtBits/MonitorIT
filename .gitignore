@@ -24,3 +24,6 @@ desktop.ini
 # except the sample. Must be "profiles/*" (not "profiles/") for the ! exception to work.
 profiles/*
 !profiles/sample_profile.json
+
+# Daily event logs (MonitorIT_events_YYYY-MM-DD.csv); contain internal IPs and device names
+logs/

@@ -1,11 +1,13 @@
 import asyncio
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -16,6 +18,7 @@ from app.icmp_engine import (
     PingResult,
     TracerouteHop,
 )
+from app.event_log import EventLog, format_duration
 from app.profile_manager import ProfileManager, ProfileData, HostEntry
 
 
@@ -23,6 +26,7 @@ from app.profile_manager import ProfileManager, ProfileData, HostEntry
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 PROFILES_DIR = APP_DIR.parent / "profiles"
+LOGS_DIR = APP_DIR.parent / "logs"
 
 DEFAULT_PROFILE = "sample_profile"
 
@@ -31,9 +35,18 @@ DEFAULT_PROFILE = "sample_profile"
 ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 
 
+MIN_DOWN_THRESHOLD = 1
+MAX_DOWN_THRESHOLD = 10
+
+
+def clamp_down_threshold(value: int) -> int:
+    return max(MIN_DOWN_THRESHOLD, min(MAX_DOWN_THRESHOLD, value))
+
+
 class IntervalConfig(BaseModel):
     ping_interval: int = Field(ge=1, le=3600)
     traceroute_interval: int = Field(ge=1, le=3600)
+    down_threshold: int = Field(default=2, ge=MIN_DOWN_THRESHOLD, le=MAX_DOWN_THRESHOLD)
 
 
 class ParseHostsRequest(BaseModel):
@@ -99,7 +112,14 @@ def _new_host_stat(h: HostEntry) -> dict:
         "sent": 0,
         "received": 0,
         "loss_pct": 0,
+        # Pending -> Online / Timeout (failed, under the down threshold) / Offline
         "status": "Pending",
+        "consecutive_failures": 0,
+        # Epoch seconds of the first failed ping in the current failure streak
+        "first_failure_at": None,
+        # Wall-clock text of when the current outage began, for the dashboard tooltip
+        "down_since": None,
+        "ever_online": False,
     }
 
 
@@ -108,15 +128,23 @@ def path_from_hops(hops: List[TracerouteHop]) -> List[Optional[str]]:
     return [None if h.ip == "*" else h.ip for h in hops]
 
 
-def paths_differ(a: List[Optional[str]], b: List[Optional[str]]) -> bool:
-    """True when some hop answered from a different router in both paths.
+def path_differences(current: List[Optional[str]], reference: List[Optional[str]]) -> List[str]:
+    """Hops that answered from a different router in both paths, e.g. 'hop 3: A -> B'.
 
     A hop that is silent in either path proves nothing (routers rate-limit ICMP
     TTL-exceeded replies), so only hops known on both sides are compared. A longer
     or shorter route still shows up: the destination lands on a hop number where
     the other path has an intermediate router.
     """
-    return any(x is not None and y is not None and x != y for x, y in zip(a, b))
+    return [
+        f"hop {i + 1}: {old} -> {new}"
+        for i, (new, old) in enumerate(zip(current, reference))
+        if new is not None and old is not None and new != old
+    ]
+
+
+def paths_differ(a: List[Optional[str]], b: List[Optional[str]]) -> bool:
+    return bool(path_differences(a, b))
 
 
 def merge_known_path(known: List[Optional[str]], current: List[Optional[str]]) -> List[Optional[str]]:
@@ -138,6 +166,7 @@ class AppState:
         self.active_profile_name: str = DEFAULT_PROFILE
         self.ping_interval: int = 3
         self.traceroute_interval: int = 1
+        self.down_threshold: int = 2
 
         self.hosts: List[HostEntry] = []
         self.host_stats: Dict[str, dict] = {}
@@ -167,24 +196,60 @@ class AppState:
                 existing_ips.add(h.ip)
                 self.host_stats[h.ip] = _new_host_stat(h)
 
-    def update_host_ping_stat(self, ip: str, result: PingResult):
+    def update_host_ping_stat(self, ip: str, result: PingResult) -> Optional[tuple]:
+        """Applies one ping result. Returns (event_type, severity, message) when the
+        host changes between up and down, otherwise None."""
         if ip not in self.host_stats:
-            return
+            return None
 
         stat = self.host_stats[ip]
         stat["sent"] += 1
         stat["is_alive"] = result.is_alive
         stat["rtt_ms"] = result.rtt_ms
+        now = time.time()
+        event = None
 
         if result.is_alive:
             stat["received"] += 1
+            if stat["status"] == "Offline":
+                if stat["ever_online"]:
+                    outage = format_duration(now - stat["first_failure_at"])
+                    event = ("host_up", "success", f"Host UP after {outage} outage")
+                else:
+                    event = ("host_up", "success", "Host reachable (first reply)")
             stat["status"] = "Online"
+            stat["ever_online"] = True
+            stat["consecutive_failures"] = 0
+            stat["first_failure_at"] = None
+            stat["down_since"] = None
         else:
-            stat["status"] = "Offline"
+            stat["consecutive_failures"] += 1
+            if stat["consecutive_failures"] == 1:
+                stat["first_failure_at"] = now
+            if stat["status"] != "Offline":
+                if stat["consecutive_failures"] >= self.down_threshold:
+                    stat["status"] = "Offline"
+                    started = datetime.fromtimestamp(stat["first_failure_at"])
+                    stat["down_since"] = started.strftime("%Y-%m-%d %H:%M:%S")
+                    if stat["ever_online"]:
+                        event = ("host_down", "critical",
+                                 f"Host DOWN ({stat['consecutive_failures']} failed pings "
+                                 f"since {started.strftime('%H:%M:%S')})")
+                    else:
+                        event = ("host_unreachable", "warning",
+                                 "Host unreachable (no reply since monitoring started)")
+                else:
+                    stat["status"] = "Timeout"
 
         if stat["sent"] > 0:
             loss = ((stat["sent"] - stat["received"]) / stat["sent"]) * 100
             stat["loss_pct"] = round(loss, 1)
+
+        return event
+
+    def host_name(self, ip: str) -> Optional[str]:
+        stat = self.host_stats.get(ip)
+        return stat["name"] if stat else None
 
     def stop_traceroute(self, target_ip: str) -> Optional[int]:
         """Cancels a traceroute worker and frees its slot. Returns the slot it held."""
@@ -210,6 +275,7 @@ class AppState:
             "active_profile": self.active_profile_name,
             "ping_interval": self.ping_interval,
             "traceroute_interval": self.traceroute_interval,
+            "down_threshold": self.down_threshold,
             "slots": slots,
         }
 
@@ -223,6 +289,36 @@ class AppState:
 
 ws_manager = ConnectionManager()
 state = AppState()
+event_log = EventLog(LOGS_DIR)
+
+
+async def emit_events(events: List[dict]):
+    """Sends newly recorded events to every dashboard."""
+    if events:
+        await ws_manager.broadcast({
+            "type": "events",
+            "events": events,
+            "unsaved": event_log.unsaved_count,
+        })
+
+
+async def log_event(event_type: str, severity: str, message: str,
+                    ip: Optional[str] = None, name: Optional[str] = None):
+    await emit_events([event_log.record(event_type, severity, message, ip=ip, name=name)])
+
+
+def event_history_payload() -> dict:
+    log_file = event_log.current_file()
+    try:
+        log_file = log_file.relative_to(APP_DIR.parent)
+    except ValueError:
+        pass  # log folder outside the project; show the full path
+    return {
+        "type": "event_history",
+        "events": event_log.recent(500),
+        "unsaved": event_log.unsaved_count,
+        "log_file": str(log_file),
+    }
 
 
 @asynccontextmanager
@@ -233,8 +329,13 @@ async def lifespan(app: FastAPI):
         state.active_profile_name = DEFAULT_PROFILE
         state.ping_interval = default_profile.ping_interval
         state.traceroute_interval = default_profile.traceroute_interval
+        state.down_threshold = clamp_down_threshold(default_profile.down_threshold)
         state.initialize_hosts(default_profile.hosts)
 
+    event_log.record(
+        "app_start", "info",
+        f"MonitorIT started (profile '{state.active_profile_name}', {len(state.hosts)} hosts)",
+    )
     state.ping_task = asyncio.create_task(global_ping_loop())
 
     yield
@@ -242,6 +343,8 @@ async def lifespan(app: FastAPI):
     state.ping_task.cancel()
     state.stop_all_traceroutes()
     shutdown_executors()
+    event_log.record("app_stop", "info", "MonitorIT stopped")
+    event_log.flush()
 
 
 app = FastAPI(title="MonitorIT Engine", lifespan=lifespan)
@@ -283,11 +386,23 @@ async def global_ping_loop():
                 results: List[PingResult] = await asyncio.gather(*tasks)
 
                 # A profile load or full import during the round replaced the host list
+                events: List[dict] = []
                 if generation == state.hosts_generation:
                     for res in results:
-                        state.update_host_ping_stat(res.ip, res)
+                        change = state.update_host_ping_stat(res.ip, res)
+                        if change:
+                            event_type, severity, message = change
+                            events.append(event_log.record(
+                                event_type, severity, message,
+                                ip=res.ip, name=state.host_name(res.ip),
+                            ))
 
                 await ws_manager.broadcast(state.ping_payload())
+                await emit_events(events)
+
+            # Retry log writes that failed because the CSV was open in Excel
+            if event_log.unsaved_count:
+                event_log.flush()
 
         except asyncio.CancelledError:
             break
@@ -311,18 +426,37 @@ async def live_traceroute_worker(target_ip: str, slot: int):
             current_path = path_from_hops(hops)
             has_answers = any(current_path)
 
+            name = state.host_name(target_ip)
+
             path_changed = False
             known_path = target_data.get("known_path", [])
-            if known_path and has_answers and paths_differ(current_path, known_path):
-                path_changed = True
+            if known_path and has_answers:
+                changes = path_differences(current_path, known_path)
+                if changes:
+                    path_changed = True
+                    await log_event("route_change", "warning",
+                                    "Route changed: " + "; ".join(changes),
+                                    ip=target_ip, name=name)
 
             if has_answers:
-                target_data["known_path"] = merge_known_path(known_path, current_path)
+                known_path = merge_known_path(known_path, current_path)
+                target_data["known_path"] = known_path
 
+            # Judged on the last-known path so a silent hop neither raises nor clears it
             baseline_diff = False
             baseline = target_data.get("baseline", [])
-            if baseline and has_answers and paths_differ(current_path, baseline):
-                baseline_diff = True
+            if baseline and known_path:
+                deviations = path_differences(known_path, baseline)
+                baseline_diff = bool(deviations)
+                if baseline_diff and not target_data.get("baseline_mismatch"):
+                    await log_event("baseline_deviation", "critical",
+                                    "Route deviates from locked baseline: " + "; ".join(deviations),
+                                    ip=target_ip, name=name)
+                elif not baseline_diff and target_data.get("baseline_mismatch"):
+                    await log_event("baseline_restored", "success",
+                                    "Route back on locked baseline",
+                                    ip=target_ip, name=name)
+                target_data["baseline_mismatch"] = baseline_diff
 
             # Hops that were silent when the baseline was locked adopt the first IP heard there
             if baseline and has_answers:
@@ -373,6 +507,29 @@ async def get_state():
     return state.sync_payload()
 
 
+@app.get("/api/events")
+async def get_events(limit: int = 500):
+    return {"events": event_log.recent(max(1, min(limit, 2000))), "unsaved": event_log.unsaved_count}
+
+
+@app.get("/api/events/export")
+async def export_events():
+    filename = f"MonitorIT_events_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content=event_log.to_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/events/clear")
+async def clear_events():
+    """Clears the dashboard view only; the daily CSV files in logs/ are kept."""
+    event_log.clear()
+    await ws_manager.broadcast(event_history_payload())
+    return {"status": "success"}
+
+
 @app.post("/api/profiles/load/{profile_name}")
 async def load_profile(profile_name: str):
     data = state.profile_mgr.load_profile(profile_name)
@@ -385,10 +542,13 @@ async def load_profile(profile_name: str):
     state.active_profile_name = data.profile_name
     state.ping_interval = data.ping_interval
     state.traceroute_interval = data.traceroute_interval
+    state.down_threshold = clamp_down_threshold(data.down_threshold)
     state.initialize_hosts(data.hosts)
 
     await ws_manager.broadcast(state.sync_payload())
     await ws_manager.broadcast(state.ping_payload())
+    await log_event("profile_loaded", "info",
+                    f"Profile '{data.profile_name}' loaded ({len(data.hosts)} hosts)")
 
     return {
         "status": "success",
@@ -396,6 +556,7 @@ async def load_profile(profile_name: str):
         "host_count": len(data.hosts),
         "ping_interval": state.ping_interval,
         "traceroute_interval": state.traceroute_interval,
+        "down_threshold": state.down_threshold,
     }
 
 
@@ -426,10 +587,14 @@ async def parse_hosts(req: ParseHostsRequest):
 async def set_active_hosts(req: SetHostsRequest):
     """Sets or appends active host grid."""
     if req.append:
+        before = len(state.hosts)
         state.add_hosts(req.hosts)
+        message = f"Added {len(state.hosts) - before} hosts ({len(state.hosts)} total)"
     else:
         state.initialize_hosts(req.hosts)
+        message = f"Host list replaced ({len(state.hosts)} hosts)"
     await ws_manager.broadcast(state.ping_payload())
+    await log_event("hosts_changed", "info", message)
     return {"status": "success", "count": len(state.hosts)}
 
 
@@ -437,6 +602,7 @@ async def set_active_hosts(req: SetHostsRequest):
 async def delete_host(req: DeleteHostRequest):
     """Removes a host from active monitoring state without resetting other stats."""
     ip = req.ip
+    name = state.host_name(ip)
 
     state.hosts = [h for h in state.hosts if h.ip != ip]
     if ip in state.host_stats:
@@ -444,6 +610,7 @@ async def delete_host(req: DeleteHostRequest):
 
     if state.stop_traceroute(ip) is not None:
         await ws_manager.broadcast(state.sync_payload())
+    await log_event("host_removed", "info", "Host removed from monitoring", ip=ip, name=name)
 
     return {"status": "success", "deleted_ip": ip, "remaining_count": len(state.hosts)}
 
@@ -464,13 +631,25 @@ async def rename_host(req: RenameHostRequest):
 
 @app.post("/api/config/intervals")
 async def set_intervals(config: IntervalConfig):
+    changes = []
+    if config.ping_interval != state.ping_interval:
+        changes.append(f"ping interval {state.ping_interval}s -> {config.ping_interval}s")
+    if config.traceroute_interval != state.traceroute_interval:
+        changes.append(f"traceroute interval {state.traceroute_interval}s -> {config.traceroute_interval}s")
+    if config.down_threshold != state.down_threshold:
+        changes.append(f"down after {state.down_threshold} -> {config.down_threshold} failed pings")
+
     state.ping_interval = config.ping_interval
     state.traceroute_interval = config.traceroute_interval
+    state.down_threshold = config.down_threshold
     await ws_manager.broadcast(state.sync_payload())
+    if changes:
+        await log_event("settings_changed", "info", "Settings: " + "; ".join(changes))
     return {
         "status": "success",
         "ping_interval": state.ping_interval,
         "traceroute_interval": state.traceroute_interval,
+        "down_threshold": state.down_threshold,
     }
 
 
@@ -506,6 +685,8 @@ async def start_traceroute(req: TracerouteStartRequest):
     )
 
     await ws_manager.broadcast(state.sync_payload())
+    await log_event("trace_started", "info", f"Route monitoring started (slot {assigned_slot})",
+                    ip=target_ip, name=state.host_name(target_ip))
     return {"status": "success", "target_ip": target_ip, "slot": assigned_slot}
 
 
@@ -515,6 +696,8 @@ async def stop_traceroute(req: TracerouteTargetRequest):
     slot = state.stop_traceroute(target_ip)
     if slot is not None:
         await ws_manager.broadcast(state.sync_payload())
+        await log_event("trace_stopped", "info", f"Route monitoring stopped (slot {slot})",
+                        ip=target_ip, name=state.host_name(target_ip))
         return {"status": "success", "stopped_target": target_ip, "slot": slot}
 
     return {"status": "not_found", "target_ip": target_ip}
@@ -532,6 +715,10 @@ async def lock_baseline(req: TracerouteTargetRequest):
         raise HTTPException(status_code=400, detail="No active traceroute path available to lock")
 
     data["baseline"] = list(known_path)
+    data["baseline_mismatch"] = False
+    route = " > ".join(ip or "*" for ip in known_path)
+    await log_event("baseline_locked", "info", f"Baseline locked: {route}",
+                    ip=target_ip, name=state.host_name(target_ip))
     return {"status": "success", "target_ip": target_ip, "baseline_path": data["baseline"]}
 
 
@@ -547,6 +734,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await websocket.send_json(state.sync_payload())
         await websocket.send_json(state.ping_payload())
+        await websocket.send_json(event_history_payload())
 
         while True:
             await websocket.receive_text()

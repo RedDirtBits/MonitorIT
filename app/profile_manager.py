@@ -36,6 +36,8 @@ class ProfileData(BaseModel):
     profile_name: str
     ping_interval: int = 3
     traceroute_interval: int = 1
+    # Consecutive failed pings before a host is marked Offline and logged as down
+    down_threshold: int = 2
     hosts: List[HostEntry] = []
 
 

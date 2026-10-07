@@ -51,6 +51,19 @@
 
             <div class="toolbar-divider"></div>
 
+            <div class="toolbar-section" title="Consecutive failed pings before a host is marked Offline and logged as down">
+                <span class="toolbar-label">Down After:</span>
+                <div class="button-group" id="downThresholdGroup">
+                    <button class="btn-toggle" data-value="1">1</button>
+                    <button class="btn-toggle active" data-value="2">2</button>
+                    <button class="btn-toggle" data-value="3">3</button>
+                    <button class="btn-toggle" data-value="5">5</button>
+                </div>
+                <span class="toolbar-label">Fails</span>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
             <div class="toolbar-section status-summary">
                 <span>Active Hosts: <strong id="statTotalHosts">0</strong></span>
                 <span>Online: <strong id="statOnlineHosts" class="text-success">0</strong></span>
@@ -87,6 +100,44 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Collapsible Event Log Strip -->
+                <div id="eventLog" class="event-log">
+                    <div id="eventLogHeader" class="event-log-header" title="Click to show or hide the event log">
+                        <div class="event-log-title">
+                            <span id="eventLogChevron" class="event-log-chevron">&#9662;</span>
+                            <h2>Event Log</h2>
+                            <span id="eventLogUnseen" class="badge badge-offline hidden" title="Alerts since the log was collapsed">0</span>
+                            <span id="eventLogUnsaved" class="text-warning event-log-unsaved hidden"></span>
+                        </div>
+                        <div class="event-log-controls">
+                            <span id="eventLogFile" class="text-muted event-log-file"></span>
+                            <select id="eventFilterSelect" class="input-select">
+                                <option value="all">All events</option>
+                                <option value="alerts">Alerts only</option>
+                                <option value="host">Hosts</option>
+                                <option value="route">Routes</option>
+                            </select>
+                            <button id="btnExportEvents" class="btn btn-secondary btn-sm">Export CSV</button>
+                            <button id="btnClearEvents" class="btn btn-secondary btn-sm" title="Clear the on-screen log (files in logs\ are kept)">Clear View</button>
+                        </div>
+                    </div>
+                    <div id="eventLogBody" class="event-log-body">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th class="col-time">Time</th>
+                                    <th class="col-severity">Severity</th>
+                                    <th class="col-host">Host / Target</th>
+                                    <th>Event</th>
+                                </tr>
+                            </thead>
+                            <tbody id="eventTableBody">
+                                <tr><td colspan="4" class="text-center text-muted">No events yet.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </section>
 

@@ -15,7 +15,9 @@ Designed specifically for restricted enterprise Windows environments, **MonitorI
 * **Scales to Large Host Lists:** Pings run on a dedicated pool of worker threads, so a profile with 100+ unreachable hosts still completes each round in about one timeout window (1 second) and never delays the traceroute sweeps.
 * **Flexible Target Parser:** Imports raw host lists, DNS hostnames, legacy PingInfoView `.txt` exports, tab/comma-separated strings, and CIDR subnet notations (e.g., `198.51.100.0/28`). Lines that cannot be used are listed back to you with the reason.
 * **Inline Editing & Row Removal:** Edit friendly host names directly inside table inputs, or click `✕` to drop unreachable firewall targets without resetting active packet statistics.
-* **JSON Profile Persistence:** Save and load custom host groups, ping rates, and traceroute intervals (`profiles/*.json`).
+* **Timestamped Event Log:** Every host outage and recovery (with outage duration), route change, baseline deviation and setting change is recorded with the time it happened, shown in a collapsible strip under the host table, and saved to a daily CSV file in `logs/` for reviews and post-mortems.
+* **Configurable Down Detection:** A host is only declared down after a set number of consecutive failed pings (default 2, adjustable in the toolbar), so a single dropped packet does not raise an outage.
+* **JSON Profile Persistence:** Save and load custom host groups, ping rates, traceroute intervals and the down threshold (`profiles/*.json`).
 * **Survives Page Refreshes:** Running traceroute slots and interval settings live on the server, so a refreshed page or a second browser tab picks them back up.
 
 ## Directory Structure
@@ -28,10 +30,12 @@ MonitorIT/
 │   │   ├── index.html       # Single-page dashboard layout
 │   │   └── style.css        # Dark operational theme
 │   ├── __init__.py
+│   ├── event_log.py         # Event history: in memory for the dashboard + daily CSV files
 │   ├── icmp_engine.py       # Windows iphlpapi.dll Ctypes wrapper (Ping & TTL traceroute)
 │   ├── main.py              # FastAPI server, WebSocket endpoints & REST API
 │   ├── open_browser.py      # Opens the dashboard once the server is listening
 │   └── profile_manager.py   # Profile loader, JSON serializer & raw host text parser
+├── logs/                    # Daily event logs, created on first run (not in Git)
 ├── profiles/
 │   └── sample_profile.json  # Default profile loaded at startup
 ├── python/                  # Optional portable embedded Python (with packages installed)
@@ -82,6 +86,16 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
 - **Filter Hosts:** Type IP addresses or names into the search bar at the top of the host table.
 - **Friendly Names:** Click into any **Friendly Name** input box to modify host labels on the fly. Press **Enter** or click away to sync changes.
 - **Remove Dead Targets:** Click the red `✕` icon next to any host row to instantly delete it from the active session.
+- **Host Status:**
+
+  | Status | Meaning |
+  |---|---|
+  | **Pending** | Not pinged yet |
+  | **Online** | Last ping answered |
+  | **Timeout** (amber) | Missed ping(s), but fewer than the **Down After** setting; hover for the count |
+  | **Offline** | Reached the **Down After** number of consecutive failures; hover to see when the outage began |
+
+- **Down After (toolbar):** The number of consecutive failed pings (1, 2, 3 or 5) before a host is marked Offline and an outage is logged. The default is 2. At the default 3-second ping interval, an outage is declared about 3–6 seconds after it begins; use 1 for the fastest detection or 3–5 on lossy links. The setting is saved with the profile.
 
 ### 2. Live Continuous Traceroute
 
@@ -92,7 +106,29 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
 - If a hop was silent at the moment you locked the baseline, the first IP that later answers at that hop is adopted into the baseline. Lock the baseline once the path looks complete for the strongest comparison.
 - Traceroutes keep running on the server if you refresh or close the page; reopening the dashboard reconnects to them. Use **Stop** to end one.
 
-### 3. Adding & Importing Hosts
+### 3. Event Log
+
+The **Event Log** strip at the bottom of the host table records what happened and when:
+
+| Severity | Events |
+|---|---|
+| **Critical** | Host DOWN; route deviates from the locked baseline |
+| **Warning** | Route changed between sweeps; host unreachable since monitoring started |
+| **Success** | Host UP (with outage duration, e.g. `Host UP after 2m 14s outage`); route back on baseline |
+| **Info** | App started/stopped, profile loaded, hosts added/removed, route monitoring started/stopped, baseline locked, settings changed |
+
+- Click the strip's header to collapse or expand it. While it is collapsed, a red counter shows how many alerts arrived since you collapsed it.
+- Drag the strip's bottom-right corner to make it taller or shorter.
+- Use the filter to show **Alerts only** (anything but Info), **Hosts**, or **Routes**.
+- **Export CSV** downloads the events currently in the strip.
+- **Clear View** empties the on-screen list only. The files on disk are never touched.
+- Route events name the hops that changed, e.g. `Route changed: hop 3: 10.1.1.2 -> 10.7.7.7`. Like the alerts, they ignore hops that simply did not answer.
+
+**Saved logs:** every event is also appended to `logs\MonitorIT_events_YYYY-MM-DD.csv` (one file per day, opens directly in Excel). When MonitorIT is restarted, today's earlier events are loaded back into the strip.
+
+If a log file is open in Excel, Windows locks it. Events are then held in memory and written as soon as the file is closed, and the strip shows a warning with the number of unsaved events. To review a log while monitoring is running, open a **copy** of the file, or use **Export CSV**.
+
+### 4. Adding & Importing Hosts
 
 - Click **"+ Add / Import Hosts"**.
 - Paste target IPs, tabbed lists, or CIDR blocks:
@@ -122,11 +158,14 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
 |`POST`|`/api/hosts/set`|Sets or appends host grid (`{ hosts: [...], append: bool }`)|
 |`POST`|`/api/hosts/delete`|Deletes a host row by IP (`{ ip: "x.x.x.x" }`)|
 |`POST`|`/api/hosts/rename`|Renames host in memory (`{ ip: "x.x.x.x", name: "y" }`)|
-|`POST`|`/api/config/intervals`|Configures ping and traceroute timers (seconds, 1–3600)|
+|`POST`|`/api/config/intervals`|Configures ping and traceroute timers (seconds, 1–3600) and `down_threshold` (1–10 failed pings)|
+|`GET`|`/api/events`|Recent events (`?limit=500`)|
+|`GET`|`/api/events/export`|Downloads the events in the dashboard view as CSV|
+|`POST`|`/api/events/clear`|Clears the dashboard view (log files are kept)|
 |`POST`|`/api/traceroute/start`|Starts continuous worker for target IP|
 |`POST`|`/api/traceroute/stop`|Stops worker for target IP|
 |`POST`|`/api/traceroute/baseline/lock`|Locks current path as route baseline|
-|`WS`|`/ws`|Real-time WebSocket feed: `state_sync`, `ping_update`, `traceroute_update` messages|
+|`WS`|`/ws`|Real-time WebSocket feed: `state_sync`, `ping_update`, `traceroute_update`, `event_history`, `events` messages|
 
 ### Local-Only Access
 
@@ -141,6 +180,7 @@ Profiles are stored as standard JSON files inside the `profiles/` directory:
   "profile_name": "Sample Profile",
   "ping_interval": 3,
   "traceroute_interval": 1,
+  "down_threshold": 2,
   "hosts": [
     { "ip": "127.0.0.1", "name": "Localhost", "group": "Default" },
     { "ip": "1.1.1.1", "name": "Cloudflare DNS", "group": "Default" }
@@ -149,6 +189,7 @@ Profiles are stored as standard JSON files inside the `profiles/` directory:
 ```
 
 - **Backup:** Copy the `profiles/` folder to back up host lists. Profiles other than `sample_profile.json` are deliberately excluded from Git (see [Version Control](#version-control-git)), so Git is **not** a backup for them.
+- **Event logs:** The daily CSV files in `logs/` are also excluded from Git and are never deleted automatically. Copy them somewhere safe if you need them for a review, and delete old ones by hand when no longer needed.
 - **Restore:** Paste JSON profiles into `profiles/` and select them from the top bar dropdown menu.
 - **Profile names:** Characters Windows does not allow in filenames (`\ / : * ? " < > |`) are replaced with `_` when saving, and the dashboard shows the name actually used.
 - **Default profile:** `sample_profile.json` is loaded automatically at startup.
@@ -163,7 +204,8 @@ The project is a **local-only** Git repository (no remote), used to track change
 |---|---|
 | `app/` source, `LaunchIT.bat`, docs, `requirements.txt` | `python/` portable runtime (64 MB of binaries; reinstallable) |
 | `profiles/sample_profile.json` | All other `profiles/*.json` (internal IPs and device names) |
-| `.gitignore`, `snapshot_v3.py`, `monitorit_project.ps1` | `venv/`, `__pycache__/`, `snapshot.md`, editor folders |
+| `.gitignore`, `snapshot_v3.py`, `monitorit_project.ps1` | `logs/` event logs (internal IPs and device names) |
+| | `venv/`, `__pycache__/`, `snapshot.md`, editor folders |
 
 ### First-Time Setup on a New Machine
 
