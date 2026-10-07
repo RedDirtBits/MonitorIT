@@ -24,12 +24,38 @@ function escapeHtml(str) {
         .replace(/'/g, "&#039;");
 }
 
+// Shows the server's error detail for a failed API call
+async function alertApiError(res, action) {
+    let detail = `HTTP ${res.status}`;
+    try {
+        const body = await res.json();
+        if (typeof body.detail === 'string') detail = body.detail;
+    } catch (e) { /* non-JSON error body */ }
+    alert(`${action} failed: ${detail}`);
+}
+
 // Web Audio API Beep Synthesizer
+// One shared context: browsers cap how many can exist, and a new one per beep
+// (every sweep while a baseline differs) eventually silences the alerts.
+let audioCtx = null;
+
+function getAudioContext() {
+    if (!audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        audioCtx = new Ctx();
+    }
+    // Contexts start suspended until the page has seen a user gesture
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+}
+
 function playRouteAlertSound() {
     if (audioMuted) return;
 
     try {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioCtx = getAudioContext();
+        if (!audioCtx) return;
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
 
@@ -85,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchProfiles();
     connectWebSocket();
     setupEventListeners();
+    document.addEventListener('pointerdown', getAudioContext, { once: true });
 });
 
 function updateAudioButtonState() {
@@ -113,7 +140,9 @@ function connectWebSocket() {
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.type === 'ping_update') {
+        if (data.type === 'state_sync') {
+            handleStateSync(data);
+        } else if (data.type === 'ping_update') {
             handlePingUpdate(data.hosts);
         } else if (data.type === 'traceroute_update') {
             handleTracerouteUpdate(data);
@@ -227,23 +256,20 @@ async function fetchProfiles() {
 
 async function loadProfile(profileName) {
     try {
-        const res = await fetch(`/api/profiles/load/${profileName}`, { method: 'POST' });
+        const res = await fetch(`/api/profiles/load/${encodeURIComponent(profileName)}`, { method: 'POST' });
         if (res.ok) {
-            activeProfile = profileName;
+            const data = await res.json();
+            activeProfile = data.profile_name;
             customNames = {};
 
             // Clear active traceroute slots on profile change
-            slot1Ip = null;
-            slot2Ip = null;
-            slot1IpDisplay.textContent = "None";
-            slot2IpDisplay.textContent = "None";
-            tracerouteTableBodySlot1.innerHTML = '';
-            tracerouteTableBodySlot2.innerHTML = '';
-            routeAlertSlot1.classList.add('hidden');
-            routeAlertSlot2.classList.add('hidden');
-            updateDrawerLayout();
+            setSlot(1, null);
+            setSlot(2, null);
+            setIntervalToggles(data.ping_interval, data.traceroute_interval);
 
             fetchProfiles();
+        } else {
+            await alertApiError(res, 'Loading profile');
         }
     } catch (e) {
         console.error("Failed to load profile:", e);
@@ -265,8 +291,12 @@ async function saveProfile(profileName) {
             body: JSON.stringify(profilePayload)
         });
         if (res.ok) {
-            alert(`Profile '${profileName}' saved successfully.`);
+            const data = await res.json();
+            activeProfile = data.profile_name;
+            alert(`Profile '${data.profile_name}' saved successfully.`);
             fetchProfiles();
+        } else {
+            await alertApiError(res, 'Saving profile');
         }
     } catch (e) {
         console.error("Failed to save profile:", e);
@@ -285,14 +315,22 @@ async function processImportHosts() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ raw_text: rawText })
         });
+        if (!res.ok) {
+            await alertApiError(res, 'Parsing hosts');
+            return;
+        }
         const data = await res.json();
 
         if (data.hosts && data.hosts.length > 0) {
-            await fetch('/api/hosts/set', {
+            const setRes = await fetch('/api/hosts/set', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ hosts: data.hosts, append: appendMode })
             });
+            if (!setRes.ok) {
+                await alertApiError(setRes, 'Adding hosts');
+                return;
+            }
 
             if (!appendMode) {
                 customNames = {};
@@ -300,6 +338,14 @@ async function processImportHosts() {
 
             importModal.classList.add('hidden');
             renderHostTable(true);
+        }
+
+        if (data.skipped && data.skipped.length > 0) {
+            const shown = data.skipped.slice(0, 20).join('\n');
+            const more = data.skipped.length > 20 ? `\n...and ${data.skipped.length - 20} more` : '';
+            alert(`Added ${data.hosts.length} host(s). Skipped ${data.skipped.length} line(s):\n\n${shown}${more}`);
+        } else if (data.hosts.length === 0) {
+            alert('No hosts found in the pasted text.');
         }
     } catch (e) {
         console.error("Failed to parse import hosts:", e);
@@ -318,20 +364,9 @@ async function deleteHost(ip) {
             loadedHosts = loadedHosts.filter(h => h.ip !== ip);
             delete customNames[ip];
             
-            if (slot1Ip === ip) {
-                slot1Ip = null;
-                slot1IpDisplay.textContent = "None";
-                tracerouteTableBodySlot1.innerHTML = '';
-                routeAlertSlot1.classList.add('hidden');
-            }
-            if (slot2Ip === ip) {
-                slot2Ip = null;
-                slot2IpDisplay.textContent = "None";
-                tracerouteTableBodySlot2.innerHTML = '';
-                routeAlertSlot2.classList.add('hidden');
-            }
+            if (slot1Ip === ip) setSlot(1, null);
+            if (slot2Ip === ip) setSlot(2, null);
 
-            updateDrawerLayout();
             renderHostTable(true);
         }
     } catch (e) {
@@ -353,11 +388,12 @@ async function saveHostRenameBackend(ip, newName) {
 
 async function updateIntervalConfig() {
     try {
-        await fetch('/api/config/intervals', {
+        const res = await fetch('/api/config/intervals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ping_interval: pingInterval, traceroute_interval: tracerouteInterval })
         });
+        if (!res.ok) await alertApiError(res, 'Updating intervals');
     } catch (e) {
         console.error("Failed to update intervals:", e);
     }
@@ -386,19 +422,10 @@ async function requestStartTraceroute(ip) {
         });
 
         if (res.ok) {
-            if (targetSlot === 1) {
-                slot1Ip = ip;
-                slot1IpDisplay.textContent = ip;
-                routeAlertSlot1.classList.add('hidden');
-                tracerouteTableBodySlot1.innerHTML = '';
-            } else {
-                slot2Ip = ip;
-                slot2IpDisplay.textContent = ip;
-                routeAlertSlot2.classList.add('hidden');
-                tracerouteTableBodySlot2.innerHTML = '';
-            }
-            updateDrawerLayout();
+            setSlot(targetSlot, ip);
             renderHostTable(true);
+        } else {
+            await alertApiError(res, 'Starting traceroute');
         }
     } catch (e) {
         console.error("Failed to start traceroute:", e);
@@ -416,18 +443,8 @@ async function stopTracerouteTarget(ip) {
         });
 
         if (res.ok) {
-            if (ip === slot1Ip) {
-                slot1Ip = null;
-                slot1IpDisplay.textContent = "None";
-                tracerouteTableBodySlot1.innerHTML = '';
-                routeAlertSlot1.classList.add('hidden');
-            } else if (ip === slot2Ip) {
-                slot2Ip = null;
-                slot2IpDisplay.textContent = "None";
-                tracerouteTableBodySlot2.innerHTML = '';
-                routeAlertSlot2.classList.add('hidden');
-            }
-            updateDrawerLayout();
+            if (ip === slot1Ip) setSlot(1, null);
+            else if (ip === slot2Ip) setSlot(2, null);
             renderHostTable(true);
         }
     } catch (e) {
@@ -446,10 +463,60 @@ async function lockTracerouteBaseline(ip) {
         });
         if (res.ok) {
             alert(`Locked baseline path for target ${ip}.`);
+        } else {
+            await alertApiError(res, 'Locking baseline');
         }
     } catch (e) {
         console.error("Failed to lock baseline:", e);
     }
+}
+
+// Assigns a target to a traceroute slot, clearing the slot's display when the target changes
+function setSlot(slot, ip) {
+    const current = slot === 1 ? slot1Ip : slot2Ip;
+    if (current !== ip) {
+        const display = slot === 1 ? slot1IpDisplay : slot2IpDisplay;
+        const body = slot === 1 ? tracerouteTableBodySlot1 : tracerouteTableBodySlot2;
+        const alertBanner = slot === 1 ? routeAlertSlot1 : routeAlertSlot2;
+        display.textContent = ip || "None";
+        body.innerHTML = '';
+        alertBanner.classList.add('hidden');
+        if (slot === 1) slot1Ip = ip;
+        else slot2Ip = ip;
+    }
+    updateDrawerLayout();
+}
+
+function setToggleGroupValue(groupId, value) {
+    document.getElementById(groupId).querySelectorAll('.btn-toggle').forEach(b => {
+        b.classList.toggle('active', parseInt(b.getAttribute('data-value')) === value);
+    });
+}
+
+function setIntervalToggles(ping, traceroute) {
+    pingInterval = ping;
+    tracerouteInterval = traceroute;
+    setToggleGroupValue('pingIntervalGroup', ping);
+    setToggleGroupValue('tracerouteIntervalGroup', traceroute);
+}
+
+// Server is the source of truth for slots and intervals; this keeps a refreshed page
+// (or a second tab) from losing track of traceroutes that are still running
+function handleStateSync(data) {
+    if (data.active_profile && data.active_profile !== activeProfile) {
+        activeProfile = data.active_profile;
+        if (profileSelect.querySelector(`option[value="${CSS.escape(activeProfile)}"]`)) {
+            profileSelect.value = activeProfile;
+        } else {
+            fetchProfiles();
+        }
+    }
+    setIntervalToggles(data.ping_interval, data.traceroute_interval);
+
+    const prevSlots = [slot1Ip, slot2Ip];
+    setSlot(1, data.slots['1'] || null);
+    setSlot(2, data.slots['2'] || null);
+    if (prevSlots[0] !== slot1Ip || prevSlots[1] !== slot2Ip) renderHostTable(true);
 }
 
 function updateDrawerLayout() {
@@ -482,8 +549,8 @@ function handlePingUpdate(hosts) {
     let online = 0;
     let offline = 0;
     hosts.forEach(h => {
-        if (h.is_alive) online++;
-        else offline++;
+        if (h.status === 'Online') online++;
+        else if (h.status === 'Offline') offline++;
     });
 
     statTotalHosts.textContent = hosts.length;
@@ -491,6 +558,18 @@ function handlePingUpdate(hosts) {
     statOfflineHosts.textContent = offline;
 
     renderHostTable(false);
+}
+
+function statusBadgeHtml(h) {
+    if (h.status === 'Online') return `<span class="badge badge-online">Online</span>`;
+    if (h.status === 'Offline') return `<span class="badge badge-offline">Offline</span>`;
+    return `<span class="badge badge-idle">Pending</span>`;
+}
+
+// Windows reports sub-millisecond replies as 0 ms; show them the way ping.exe does
+function formatRtt(rtt, missing) {
+    if (rtt === null || rtt === undefined) return missing;
+    return rtt === 0 ? '<1 ms' : `${rtt} ms`;
 }
 
 function renderHostTable(forceRebuild = false) {
@@ -528,11 +607,9 @@ function renderHostTable(forceRebuild = false) {
             const lossTd = tr.children[6];
             const actionTd = tr.children[7];
 
-            statusTd.innerHTML = h.is_alive 
-                ? `<span class="badge badge-online">Online</span>`
-                : `<span class="badge badge-offline">Offline</span>`;
+            statusTd.innerHTML = statusBadgeHtml(h);
 
-            rttTd.textContent = h.rtt_ms !== null ? `${h.rtt_ms} ms` : '-';
+            rttTd.textContent = formatRtt(h.rtt_ms, '-');
             sentTd.textContent = h.sent;
             recvTd.textContent = h.received;
             lossTd.className = h.loss_pct > 0 ? 'text-danger' : 'text-success';
@@ -567,11 +644,9 @@ function renderHostTable(forceRebuild = false) {
         tr.setAttribute('data-ip', h.ip);
         if (selectedHostIp === h.ip) tr.classList.add('selected');
 
-        const statusBadge = h.is_alive 
-            ? `<span class="badge badge-online">Online</span>`
-            : `<span class="badge badge-offline">Offline</span>`;
+        const statusBadge = statusBadgeHtml(h);
 
-        const rttDisplay = h.rtt_ms !== null ? `${h.rtt_ms} ms` : '-';
+        const rttDisplay = formatRtt(h.rtt_ms, '-');
 
         let traceBtnLabel = "Monitor Route";
         let traceBtnClass = "btn-primary";
@@ -651,6 +726,9 @@ function renderHostTable(forceRebuild = false) {
 
 function handleTracerouteUpdate(data) {
     const slot = data.slot;
+    // Drop updates still in flight from a target that has since left this slot
+    if (data.target_ip !== (slot === 1 ? slot1Ip : slot2Ip)) return;
+
     const targetBody = slot === 1 ? tracerouteTableBodySlot1 : tracerouteTableBodySlot2;
     const alertBanner = slot === 1 ? routeAlertSlot1 : routeAlertSlot2;
     const alertDetails = slot === 1 ? routeAlertDetailsSlot1 : routeAlertDetailsSlot2;
@@ -670,24 +748,32 @@ function handleTracerouteUpdate(data) {
     data.hops.forEach((hop, idx) => {
         const tr = document.createElement('tr');
         
+        // baseline_path is hop-indexed (index 0 = hop 1), with null for hops that were silent
         let baselineIp = "-";
-        if (data.baseline_path && data.baseline_path[idx]) {
-            baselineIp = data.baseline_path[idx];
-            if (hop.ip !== "*" && hop.ip !== baselineIp) {
-                tr.classList.add('hop-changed');
+        if (data.baseline_path && data.baseline_path.length > 0) {
+            const baseHop = data.baseline_path[hop.hop_number - 1];
+            if (baseHop === undefined) {
+                baselineIp = "-";
+            } else if (baseHop === null) {
+                baselineIp = "*";
+            } else {
+                baselineIp = baseHop;
+                if (hop.ip !== "*" && hop.ip !== baseHop) {
+                    tr.classList.add('hop-changed');
+                }
             }
         }
 
-        const rttDisplay = hop.rtt_ms !== null ? `${hop.rtt_ms} ms` : '*';
+        const rttDisplay = formatRtt(hop.rtt_ms, '*');
         const destFlag = hop.is_destination ? ` <span class="text-success">(Target)</span>` : '';
 
         tr.innerHTML = `
             <td><strong>Hop ${hop.hop_number}</strong></td>
-            <td>${hop.ip}${destFlag}</td>
+            <td>${escapeHtml(hop.ip)}${destFlag}</td>
             <td>${rttDisplay}</td>
-            <td>${baselineIp}</td>
+            <td>${escapeHtml(baselineIp)}</td>
         `;
 
         targetBody.appendChild(tr);
     });
-}
+}

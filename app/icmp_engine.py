@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 import socket
 from typing import List, Optional
@@ -32,6 +33,16 @@ class ICMP_ECHO_REPLY(ctypes.Structure):
 IP_SUCCESS = 0
 IP_REQ_TIMED_OUT = 11010
 IP_TTL_EXPIRED_IN_TRANSIT = 11013
+
+# IcmpCreateFile returns INVALID_HANDLE_VALUE ((HANDLE)-1) on failure; ctypes hands
+# the HANDLE back as a plain int, so compare against the int value, not a HANDLE object
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+# IcmpSendEcho blocks its thread for up to timeout_ms, so pings and traceroutes get
+# their own pools. The asyncio default pool (min(32, CPUs + 4) threads) is shared, which
+# let a large profile full of dead hosts stall both ping rounds and route sweeps.
+PING_EXECUTOR = ThreadPoolExecutor(max_workers=256, thread_name_prefix="icmp-ping")
+TRACE_EXECUTOR = ThreadPoolExecutor(max_workers=64, thread_name_prefix="icmp-trace")
 
 # Load Windows IP Helper DLL
 iphlpapi = ctypes.windll.iphlpapi
@@ -95,7 +106,7 @@ def raw_icmp_echo(
         return PingResult(ip=ip_str, is_alive=False, rtt_ms=None, status_code=-1)
 
     handle = IcmpCreateFile()
-    if handle == wintypes.HANDLE(-1) or not handle:
+    if not handle or handle == INVALID_HANDLE_VALUE:
         return PingResult(ip=ip_str, is_alive=False, rtt_ms=None, status_code=-2)
 
     try:
@@ -164,7 +175,7 @@ def raw_icmp_ttl_probe(
         )
 
     handle = IcmpCreateFile()
-    if handle == wintypes.HANDLE(-1) or not handle:
+    if not handle or handle == INVALID_HANDLE_VALUE:
         return TracerouteHop(
             hop_number=hop,
             ip="*",
@@ -244,14 +255,16 @@ async def async_ping_host(
     ip_str: str, timeout_ms: int = 1000
 ) -> PingResult:
     """Async thread-pool wrapper for unprivileged ping execution."""
-    return await asyncio.to_thread(raw_icmp_echo, ip_str, 128, timeout_ms)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(PING_EXECUTOR, raw_icmp_echo, ip_str, 128, timeout_ms)
 
 
 async def async_probe_ttl_hop(
     ip_str: str, hop: int, timeout_ms: int = 1000
 ) -> TracerouteHop:
     """Async thread-pool wrapper for single TTL hop probe execution."""
-    return await asyncio.to_thread(raw_icmp_ttl_probe, ip_str, hop, timeout_ms)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(TRACE_EXECUTOR, raw_icmp_ttl_probe, ip_str, hop, timeout_ms)
 
 
 async def async_run_traceroute_sweep(
@@ -268,3 +281,9 @@ async def async_run_traceroute_sweep(
             break
 
     return hops
+
+
+def shutdown_executors() -> None:
+    """Releases the ICMP worker pools without waiting on in-flight probes."""
+    PING_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    TRACE_EXECUTOR.shutdown(wait=False, cancel_futures=True)

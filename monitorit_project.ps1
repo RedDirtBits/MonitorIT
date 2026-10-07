@@ -7,6 +7,7 @@ $directories = @(
 
 $files = @(
     "$projectName/app/__init__.py",
+    "$projectName/app/open_browser.py",
     "$projectName/app/icmp_engine.py",
     "$projectName/app/main.py",
     "$projectName/app/profile_manager.py",
@@ -14,7 +15,7 @@ $files = @(
     "$projectName/app/static/index.html",
     "$projectName/app/static/style.css",
     "$projectName/profiles/sample_profile.json",
-    "$projectName/Launch-MonitorIT.bat",
+    "$projectName/LaunchIT.bat",
     "$projectName/README.md",
     "$projectName/TROUBLESHOOTING.md",
     "$projectName/requirements.txt"
