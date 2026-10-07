@@ -173,6 +173,105 @@ def merge_known_path(known: List[Optional[str]], current: List[Optional[str]]) -
     ]
 
 
+def _new_hop_stat(ip: Optional[str], now: float) -> dict:
+    return {
+        "ip": ip,
+        "sent": 0,
+        "received": 0,
+        "last": None,
+        "best": None,
+        "worst": None,
+        "rtt_total": 0,
+        # Jitter = mean absolute difference between consecutive replies (as MTR reports it)
+        "jitter_total": 0,
+        "jitter_count": 0,
+        "since": now,
+    }
+
+
+def update_hop_stats(stats: List[Optional[dict]], hops: List[TracerouteHop],
+                     target_ip: str, known_path: List[Optional[str]], now: float) -> None:
+    """Adds one sweep to the per-hop counters (index 0 = hop 1), in place.
+
+    Only hops up to the destination are counted: probes with a larger TTL reach the
+    destination too, so those rows are not separate routers. When the destination has
+    never answered, counting stops at the last hop that has ever replied. A hop whose
+    router IP changes starts counting afresh (the change itself is in the event log).
+    """
+    if target_ip in known_path:
+        limit = known_path.index(target_ip) + 1
+    else:
+        answered = [i for i, ip in enumerate(known_path) if ip is not None]
+        limit = answered[-1] + 1 if answered else 0
+
+    del stats[limit:]  # the route got shorter
+    for hop in hops[:limit]:
+        i = hop.hop_number - 1
+        ip = None if hop.ip == "*" else hop.ip
+        while len(stats) <= i:
+            stats.append(None)
+        st = stats[i]
+        if st is None or (ip and st["ip"] and ip != st["ip"]):
+            st = stats[i] = _new_hop_stat(ip, now)
+        elif ip and not st["ip"]:
+            st["ip"] = ip
+
+        st["sent"] += 1
+        if ip is None or hop.rtt_ms is None:
+            continue
+        rtt = hop.rtt_ms
+        if st["last"] is not None:
+            st["jitter_total"] += abs(rtt - st["last"])
+            st["jitter_count"] += 1
+        st["received"] += 1
+        st["last"] = rtt
+        st["rtt_total"] += rtt
+        st["best"] = rtt if st["best"] is None else min(st["best"], rtt)
+        st["worst"] = rtt if st["worst"] is None else max(st["worst"], rtt)
+
+
+def summarize_hop_stats(stats: List[Optional[dict]], destination_known: bool) -> List[Optional[dict]]:
+    """Per-hop figures for the dashboard, including how to read any loss.
+
+    loss_kind: "none"; "real" when the loss carries through every later hop to the
+    destination; "rate_limited" when a later hop shows none (the router just answers
+    traceroute probes sparingly); "unknown" when the destination has not been reached.
+    """
+    summary: List[Optional[dict]] = []
+    for st in stats:
+        if st is None or st["sent"] == 0:
+            summary.append(None)
+            continue
+        received = st["received"]
+        summary.append({
+            "ip": st["ip"],
+            "sent": st["sent"],
+            "received": received,
+            "loss_pct": round((st["sent"] - received) / st["sent"] * 100, 1),
+            "last": st["last"],
+            "best": st["best"],
+            "worst": st["worst"],
+            "avg": round(st["rtt_total"] / received, 1) if received else None,
+            "jitter": round(st["jitter_total"] / st["jitter_count"], 1) if st["jitter_count"] else None,
+            "since": datetime.fromtimestamp(st["since"]).strftime("%H:%M:%S"),
+            "loss_kind": "none",
+        })
+
+    # Walk back from the destination tracking whether every later hop also lost probes
+    later_all_lossy = True
+    for s in reversed(summary):
+        if s is None:
+            continue
+        lossy = s["loss_pct"] > 0
+        if lossy:
+            if not destination_known:
+                s["loss_kind"] = "unknown"
+            else:
+                s["loss_kind"] = "real" if later_all_lossy else "rate_limited"
+        later_all_lossy = later_all_lossy and lossy
+    return summary
+
+
 class AppState:
     """Central state engine for host statuses, background loops, and dual traceroutes."""
 
@@ -191,7 +290,8 @@ class AppState:
         # Dual Traceroute State Slots
         # Key: target_ip -> Dict: {"slot": 1/2, "baseline": [...], "known_path": [...], "task": Task}
         # Paths are hop-indexed lists of IPs with None for silent hops (see path_from_hops);
-        # known_path keeps the last IP heard at each hop so one silent sweep loses nothing
+        # known_path keeps the last IP heard at each hop so one silent sweep loses nothing;
+        # hop_stats holds per-hop loss/RTT counters (see update_hop_stats)
         self.active_traceroutes: Dict[str, dict] = {}
 
         self.ping_task: Optional[asyncio.Task] = None
@@ -502,11 +602,17 @@ async def live_traceroute_worker(target_ip: str, slot: int):
                     if baseline[i] is None and known[i] is not None:
                         baseline[i] = known[i]
 
+            hop_stats = target_data.setdefault("hop_stats", [])
+            update_hop_stats(hop_stats, hops, target_ip, known_path, time.time())
+            summary = summarize_hop_stats(hop_stats, destination_known=target_ip in known_path)
+
             payload = {
                 "type": "traceroute_update",
                 "slot": slot,
                 "target_ip": target_ip,
                 "hops": [h.model_dump() for h in hops],
+                # Aligned with hops; None for rows that are not counted
+                "hop_stats": [summary[i] if i < len(summary) else None for i in range(len(hops))],
                 "path_changed": path_changed,
                 "baseline_diff": baseline_diff,
                 "baseline_path": baseline,
@@ -716,6 +822,7 @@ async def start_traceroute(req: TracerouteStartRequest):
         "slot": assigned_slot,
         "baseline": [],
         "known_path": [],
+        "hop_stats": [],
     }
     state.active_traceroutes[target_ip]["task"] = asyncio.create_task(
         live_traceroute_worker(target_ip, assigned_slot)
@@ -738,6 +845,20 @@ async def stop_traceroute(req: TracerouteTargetRequest):
         return {"status": "success", "stopped_target": target_ip, "slot": slot}
 
     return {"status": "not_found", "target_ip": target_ip}
+
+
+@app.post("/api/traceroute/stats/reset")
+async def reset_hop_stats(req: TracerouteTargetRequest):
+    """Restarts one slot's per-hop loss/RTT counters; baseline and alerts are untouched."""
+    target_ip = req.target_ip
+    data = state.active_traceroutes.get(target_ip)
+    if not data:
+        raise HTTPException(status_code=404, detail="Target IP not actively monitored")
+
+    data["hop_stats"] = []
+    await log_event("trace_stats_reset", "info", f"Hop statistics reset (slot {data['slot']})",
+                    ip=target_ip, name=state.host_name(target_ip))
+    return {"status": "success", "target_ip": target_ip, "slot": data["slot"]}
 
 
 @app.post("/api/traceroute/baseline/lock")

@@ -98,6 +98,7 @@ const tracerouteEmptyState = document.getElementById('tracerouteEmptyState');
 
 const tracerouteSlot1 = document.getElementById('tracerouteSlot1');
 const slot1IpDisplay = document.getElementById('slot1IpDisplay');
+const btnResetStatsSlot1 = document.getElementById('btnResetStatsSlot1');
 const btnLockBaselineSlot1 = document.getElementById('btnLockBaselineSlot1');
 const btnStopSlot1 = document.getElementById('btnStopSlot1');
 const routeAlertSlot1 = document.getElementById('routeAlertSlot1');
@@ -106,6 +107,7 @@ const tracerouteTableBodySlot1 = document.getElementById('tracerouteTableBodySlo
 
 const tracerouteSlot2 = document.getElementById('tracerouteSlot2');
 const slot2IpDisplay = document.getElementById('slot2IpDisplay');
+const btnResetStatsSlot2 = document.getElementById('btnResetStatsSlot2');
 const btnLockBaselineSlot2 = document.getElementById('btnLockBaselineSlot2');
 const btnStopSlot2 = document.getElementById('btnStopSlot2');
 const routeAlertSlot2 = document.getElementById('routeAlertSlot2');
@@ -266,9 +268,11 @@ function setupEventListeners() {
     });
 
     // Slot 1 & Slot 2 Controls
+    btnResetStatsSlot1.addEventListener('click', () => resetHopStats(slot1Ip));
     btnLockBaselineSlot1.addEventListener('click', () => lockTracerouteBaseline(slot1Ip));
     btnStopSlot1.addEventListener('click', () => stopTracerouteTarget(slot1Ip));
 
+    btnResetStatsSlot2.addEventListener('click', () => resetHopStats(slot2Ip));
     btnLockBaselineSlot2.addEventListener('click', () => lockTracerouteBaseline(slot2Ip));
     btnStopSlot2.addEventListener('click', () => stopTracerouteTarget(slot2Ip));
 }
@@ -505,6 +509,21 @@ async function stopTracerouteTarget(ip) {
         }
     } catch (e) {
         console.error("Failed to stop traceroute:", e);
+    }
+}
+
+async function resetHopStats(ip) {
+    if (!ip) return;
+
+    try {
+        const res = await fetch('/api/traceroute/stats/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_ip: ip })
+        });
+        if (!res.ok) await alertApiError(res, 'Resetting hop statistics');
+    } catch (e) {
+        console.error("Failed to reset hop statistics:", e);
     }
 }
 
@@ -860,8 +879,6 @@ function handleTracerouteUpdate(data) {
     const alertBanner = slot === 1 ? routeAlertSlot1 : routeAlertSlot2;
     const alertDetails = slot === 1 ? routeAlertDetailsSlot1 : routeAlertDetailsSlot2;
 
-    targetBody.innerHTML = '';
-
     if (data.path_changed || data.baseline_diff) {
         alertBanner.classList.remove('hidden');
         alertDetails.textContent = data.baseline_diff 
@@ -872,37 +889,100 @@ function handleTracerouteUpdate(data) {
         alertBanner.classList.add('hidden');
     }
 
-    data.hops.forEach((hop, idx) => {
+    // Rows are updated in place rather than rebuilt, so a hop's hover tooltip is not
+    // destroyed by the next sweep
+    while (targetBody.children.length > data.hops.length) {
+        targetBody.lastElementChild.remove();
+    }
+    while (targetBody.children.length < data.hops.length) {
         const tr = document.createElement('tr');
-        
+        for (let i = 0; i < 5; i++) tr.appendChild(document.createElement('td'));
+        targetBody.appendChild(tr);
+    }
+
+    data.hops.forEach((hop, idx) => {
+        const tr = targetBody.children[idx];
+        const c = tr.children;
+        const stats = data.hop_stats ? data.hop_stats[idx] : null;
+
         // baseline_path is hop-indexed (index 0 = hop 1), with null for hops that were silent
         let baselineIp = "-";
+        let changed = false;
         if (data.baseline_path && data.baseline_path.length > 0) {
             const baseHop = data.baseline_path[hop.hop_number - 1];
-            if (baseHop === undefined) {
-                baselineIp = "-";
-            } else if (baseHop === null) {
+            if (baseHop === null) {
                 baselineIp = "*";
-            } else {
+            } else if (baseHop !== undefined) {
                 baselineIp = baseHop;
-                if (hop.ip !== "*" && hop.ip !== baseHop) {
-                    tr.classList.add('hop-changed');
-                }
+                changed = hop.ip !== "*" && hop.ip !== baseHop;
             }
         }
+        tr.classList.toggle('hop-changed', changed);
 
-        const rttDisplay = formatRtt(hop.rtt_ms, '*');
+        setHtmlIfChanged(c[0], `<strong>Hop ${hop.hop_number}</strong>`);
         const destFlag = hop.is_destination ? ` <span class="text-success">(Target)</span>` : '';
+        setHtmlIfChanged(c[1], `${escapeHtml(hop.ip)}${destFlag}`);
 
-        tr.innerHTML = `
-            <td><strong>Hop ${hop.hop_number}</strong></td>
-            <td>${escapeHtml(hop.ip)}${destFlag}</td>
-            <td>${rttDisplay}</td>
-            <td>${escapeHtml(baselineIp)}</td>
-        `;
+        let lossText = '-';
+        let lossClass = '';
+        if (stats) {
+            lossText = `${stats.loss_pct}%`;
+            if (stats.loss_kind === 'real') lossClass = 'loss-real';
+            else if (stats.loss_kind === 'rate_limited') lossClass = 'text-muted';
+        }
+        setTextIfChanged(c[2], lossText);
+        if (c[2].className !== lossClass) c[2].className = lossClass;
 
-        targetBody.appendChild(tr);
+        setTextIfChanged(c[3], formatRtt(hop.rtt_ms, '*'));
+        setTextIfChanged(c[4], baselineIp);
+
+        const tip = hopTooltip(hop, stats);
+        if (tip) {
+            if (tr.title !== tip) tr.title = tip;
+        } else {
+            tr.removeAttribute('title');
+        }
     });
+}
+
+// Only touch the DOM when content changes; replacing the node under the mouse would
+// close its tooltip every sweep
+function setTextIfChanged(el, text) {
+    if (el.textContent !== String(text)) el.textContent = text;
+}
+
+function setHtmlIfChanged(el, html) {
+    if (el.dataset.html !== html) {
+        el.innerHTML = html;
+        el.dataset.html = html;
+    }
+}
+
+// Hover text for a traceroute hop row; empty when the hop is not being counted
+function hopTooltip(hop, s) {
+    if (!s) return '';
+    const router = s.ip || (hop.ip !== '*' ? hop.ip : 'no reply yet');
+    const lines = [
+        `Hop ${hop.hop_number}: ${router}`,
+        `Sent ${s.sent}   Received ${s.received}   Loss ${s.loss_pct}%`
+    ];
+    if (s.received > 0) {
+        let rtts = `Last ${formatRtt(s.last, '-')}   Avg ${s.avg} ms   ` +
+            `Best ${formatRtt(s.best, '-')}   Worst ${formatRtt(s.worst, '-')}`;
+        if (s.jitter !== null) rtts += `   Jitter ${s.jitter} ms`;
+        lines.push(rtts);
+    } else {
+        lines.push('No replies from this hop (many routers do not answer traceroute probes)');
+    }
+    lines.push(`Counting since ${s.since}`);
+    if (s.loss_kind === 'rate_limited') {
+        lines.push('Loss here but not at later hops is usually router rate limiting, not real loss.');
+    } else if (s.loss_kind === 'real') {
+        lines.push('Loss continues through to the destination: likely real packet loss.');
+    } else if (s.loss_kind === 'unknown') {
+        lines.push('Destination not reached, so this loss cannot be judged.');
+    }
+    return lines.join('\n');
 }
 
 // Event Log Strip

@@ -10,7 +10,7 @@ Designed specifically for restricted enterprise Windows environments, **MonitorI
 ## Key Features
 
 * **Zero Administrator Privileges Required:** Executes unprivileged ICMP Echo Requests and TTL-restricted traceroute sweeps using Windows C APIs (`IcmpSendEcho`).
-* **Dual-Slot Live Route Monitor:** Continuously monitors intermediate routing paths for up to two targets simultaneously (stacked 50/50 vertically).
+* **Dual-Slot Live Route Monitor:** Continuously monitors intermediate routing paths for up to two targets simultaneously (stacked 50/50 vertically), with WinMTR-style per-hop loss and RTT statistics.
 * **Automated Path Shift & Baseline Alerts:** Visual flashes and audio beeps trigger instantly when intermediate hop IPs deviate from previous sweeps or locked baseline routes. Hops that simply fail to answer (routers rate-limit ICMP replies) are not treated as route changes.
 * **Scales to Large Host Lists:** Pings run on a dedicated pool of worker threads, so a profile with 100+ unreachable hosts still completes each round in about one timeout window (1 second) and never delays the traceroute sweeps.
 * **Flexible Target Parser:** Imports raw host lists, DNS hostnames, legacy PingInfoView `.txt` exports, tab/comma-separated strings, and CIDR subnet notations (e.g., `198.51.100.0/28`). Lines that cannot be used are listed back to you with the reason.
@@ -40,9 +40,14 @@ MonitorIT/
 ├── profiles/
 │   └── sample_profile.json  # Default profile loaded at startup
 ├── python/                  # Optional portable embedded Python (with packages installed)
+├── tests/                   # Automated tests (see Running the Tests)
+│   ├── conftest.py          # Simulated iphlpapi.dll + shared test setup
+│   └── test_*.py            # Engine, parser, route logic, hosts, event log, API, route monitor
 ├── LaunchIT.bat             # One-click launcher (portable Python or venv)
+├── pytest.ini               # Test settings
 ├── README.md                # Project documentation
 ├── requirements.txt         # Python dependencies
+├── requirements-dev.txt     # Extra packages for running the tests only
 └── TROUBLESHOOTING.md       # Operational issue and bug log
 ```
 
@@ -118,6 +123,26 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
 - If a hop was silent at the moment you locked the baseline, the first IP that later answers at that hop is adopted into the baseline. Lock the baseline once the path looks complete for the strongest comparison.
 - Traceroutes keep running on the server if you refresh or close the page; reopening the dashboard reconnects to them. Use **Stop** to end one.
 
+#### Per-Hop Statistics
+
+Each slot keeps running statistics for every hop, like WinMTR:
+
+- **Loss column:** the share of probes the hop did not answer.
+- **Hover over a hop row** for the full figures: sent/received, last / avg / best / worst RTT, jitter (the average change between consecutive replies), and when counting started. The tooltip is a snapshot; move the mouse off and back on to refresh it.
+- **Reset Stats** (slot header) restarts that slot's counters, e.g. at the start of a change window. The locked baseline, route alerts, host statistics and the other slot are not affected, and the reset is recorded in the event log.
+- A hop's counters also restart on their own when a different router starts answering at that hop (the route change itself is in the event log).
+- Only hops up to the destination are counted.
+
+**Reading loss correctly:** routers answer traceroute probes at low priority and often limit how many they send, so an intermediate hop can show loss while the network is fine. MonitorIT classifies it for you:
+
+| Loss shown | Meaning |
+|---|---|
+| **Amber, bold** | Loss continues through every later hop to the destination: likely real packet loss |
+| Grey | Loss at this hop but not at a later hop: usually router rate limiting, not real loss |
+| Normal | No loss, or the destination has not been reached so the loss cannot be judged yet |
+
+A hop that never answers at all (shown as `*`, 100% loss, grey) is simply a router configured not to reply to traceroute; traffic still passes through it.
+
 ### 3. Event Log
 
 The **Event Log** strip at the bottom of the host table records what happened and when:
@@ -127,7 +152,7 @@ The **Event Log** strip at the bottom of the host table records what happened an
 | **Critical** | Host DOWN; route deviates from the locked baseline |
 | **Warning** | Route changed between sweeps; host unreachable since monitoring started |
 | **Success** | Host UP (with outage duration, e.g. `Host UP after 2m 14s outage`); route back on baseline |
-| **Info** | App started/stopped, profile loaded, hosts added/removed, route monitoring started/stopped, baseline locked, settings changed |
+| **Info** | App started/stopped, profile loaded, hosts added/removed, route monitoring started/stopped, baseline locked, hop statistics reset, settings changed |
 
 - Click the strip's header to collapse or expand it. While it is collapsed, a red counter shows how many alerts arrived since you collapsed it.
 - Drag the strip's bottom-right corner to make it taller or shorter.
@@ -177,6 +202,7 @@ If a log file is open in Excel, Windows locks it. Events are then held in memory
 |`POST`|`/api/traceroute/start`|Starts continuous worker for target IP|
 |`POST`|`/api/traceroute/stop`|Stops worker for target IP|
 |`POST`|`/api/traceroute/baseline/lock`|Locks current path as route baseline|
+|`POST`|`/api/traceroute/stats/reset`|Restarts a slot's per-hop loss/RTT counters (`{ target_ip: "x.x.x.x" }`)|
 |`WS`|`/ws`|Real-time WebSocket feed: `state_sync`, `ping_update`, `traceroute_update`, `event_history`, `events` messages|
 
 ### Local-Only Access
@@ -206,6 +232,55 @@ Profiles are stored as standard JSON files inside the `profiles/` directory:
 - **Profile names:** Characters Windows does not allow in filenames (`\ / : * ? " < > |`) are replaced with `_` when saving, and the dashboard shows the name actually used.
 - **Default profile:** `sample_profile.json` is loaded automatically at startup.
 
+## Running the Tests
+
+The `tests/` folder holds an automated test suite (about 70 tests) that checks MonitorIT's behaviour, including the parts that are easy to break by accident: route comparison that ignores silent hops, per-hop loss classification, the down threshold and outage tracking, event log files, and the localhost security checks. Run it after changing the code and before committing.
+
+**How it works:** MonitorIT's only Windows-specific part is `iphlpapi.dll`. The tests replace it with a simulated network (live and dead hosts, routers, a rate-limited hop, reroutes) and then run the real application against it. That means the suite runs on any computer, Windows or Linux, and gives the same results every time. Nothing in the tests refers to a real network; all addresses come from the reserved documentation ranges.
+
+One test, `test_windows_smoke.py`, instead uses the **real** Windows ICMP layer, pinging and tracing to `127.0.0.1`. It runs only on Windows (it is skipped elsewhere) and is a quick check that the real Windows side still works.
+
+### Setup (once)
+
+The tests need two extra packages, `pytest` and `httpx2`, listed in `requirements-dev.txt`. MonitorIT itself doesn't use them.
+
+**Recommended, if a full Python is installed** (a virtual environment keeps the test packages separate):
+
+```powershell
+cd MonitorIT
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+```
+
+**If only the portable `python\` folder is available:**
+
+```powershell
+.\python\python.exe -m pip install pytest httpx2
+```
+
+This adds the test packages to the portable Python. They don't change how MonitorIT runs, but if you ever share the portable folder with others, start from a clean copy without them.
+
+### Running
+
+From the `MonitorIT` folder (with the venv activated, or using `.\python\python.exe` in place of `python`):
+
+```powershell
+python -m pytest                  # Everything: about 25-40 seconds
+python -m pytest -m "not slow"    # Skip the live route-monitor tests: a few seconds
+python -m pytest tests\test_event_log.py   # One file
+python -m pytest -k outage        # Tests whose names contain "outage"
+```
+
+A good run ends with a line like `71 passed, 1 skipped` (on Windows the smoke test runs too, so expect `72 passed`). Any `FAILED` line names the test that broke and shows what it expected.
+
+The live route-monitor tests (`slow`) take longest because they run real one-second traceroute sweeps.
+
+### What the tests don't cover
+
+- **Real network behaviour.** Only the Windows smoke test touches the real ICMP layer, and only against `127.0.0.1`. Testing against real targets on the Windows PC remains the final check.
+- **How the dashboard looks.** The tests check the data the server sends, not the browser display, so layout, tooltips and colours still need a look on screen.
+
 ## Version Control (Git)
 
 The project is a **local-only** Git repository (no remote), used to track changes to the app and roll back if something breaks. Commits use the GitHub noreply address `673674+RedDirtBits@users.noreply.github.com`, which is set for this repository only.
@@ -214,10 +289,10 @@ The project is a **local-only** Git repository (no remote), used to track change
 
 | Tracked | Ignored (see `.gitignore`) |
 |---|---|
-| `app/` source, `LaunchIT.bat`, docs, `requirements.txt` | `python/` portable runtime (64 MB of binaries; reinstallable) |
+| `app/` source, `tests/`, `LaunchIT.bat`, docs, `requirements*.txt`, `pytest.ini` | `python/` portable runtime (64 MB of binaries; reinstallable) |
 | `profiles/sample_profile.json` | All other `profiles/*.json` (internal IPs and device names) |
 | `.gitignore`, `snapshot_v3.py`, `monitorit_project.ps1` | `logs/` event logs (internal IPs and device names) |
-| | `venv/`, `__pycache__/`, `snapshot.md`, editor folders |
+| | `venv/`, `__pycache__/`, `.pytest_cache/`, `snapshot.md`, editor folders |
 
 ### First-Time Setup on a New Machine
 
@@ -242,7 +317,7 @@ git commit -m "Describe what changed and why"
 git log --oneline               # List commits, newest first
 ```
 
-Commit after each working change, so there is always a known-good point to return to.
+Commit after each working change, so there is always a known-good point to return to. Running `python -m pytest` first (see [Running the Tests](#running-the-tests)) confirms the change didn't break anything.
 
 ### Undoing Mistakes
 

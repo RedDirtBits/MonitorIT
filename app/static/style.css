@@ -501,6 +501,12 @@ tr.selected {
     gap: 8px;
 }
 
+/* Per-hop loss that carries through to the destination (likely real) */
+td.loss-real {
+    color: var(--color-warning);
+    font-weight: bold;
+}
+
 /* Route Change Hop Highlight */
 tr.hop-changed {
     background-color: #4a340e !important;

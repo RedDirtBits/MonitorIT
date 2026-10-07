@@ -27,3 +27,6 @@ profiles/*
 
 # Daily event logs (MonitorIT_events_YYYY-MM-DD.csv); contain internal IPs and device names
 logs/
+
+# pytest
+.pytest_cache/
