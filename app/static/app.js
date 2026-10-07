@@ -639,6 +639,74 @@ function formatRtt(rtt, missing) {
     return rtt === 0 ? '<1 ms' : `${rtt} ms`;
 }
 
+// Host table column positions (must match the <th> order in index.html)
+const HOST_COL = {
+    status: 0, ip: 1, name: 2, rtt: 3, avg: 4, sent: 5, recv: 6, loss: 7,
+    lastSeen: 8, outages: 9, downtime: 10, actions: 11
+};
+const HOST_TABLE_COLUMNS = 12;
+
+// Matches format_duration() in app/event_log.py: 47s, 3m 12s, 1h 04m 10s
+function formatDuration(seconds) {
+    const total = Math.round(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const pad = n => String(n).padStart(2, '0');
+    if (hours) return `${hours}h ${pad(minutes)}m ${pad(secs)}s`;
+    if (minutes) return `${minutes}m ${pad(secs)}s`;
+    return `${secs}s`;
+}
+
+// 'YYYY-MM-DD HH:MM:SS' -> time only when it is today, full timestamp otherwise
+function formatTimestamp(ts) {
+    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+    return ts.startsWith(today) ? ts.slice(11) : ts;
+}
+
+function setCell(td, text, className = '', title = '') {
+    td.textContent = text;
+    td.className = className;
+    td.title = title;
+}
+
+// Fills every statistics cell of a host row; shared by full rebuilds and in-place updates
+function updateHostStatCells(tr, h) {
+    const c = tr.children;
+    c[HOST_COL.status].innerHTML = statusBadgeHtml(h);
+
+    const rttTip = h.rtt_min !== null
+        ? `Min ${h.rtt_min} ms / Avg ${h.rtt_avg} ms / Max ${h.rtt_max} ms`
+        : '';
+    setCell(c[HOST_COL.rtt], formatRtt(h.rtt_ms, '-'), '', rttTip);
+    setCell(c[HOST_COL.avg], h.rtt_avg !== null ? `${h.rtt_avg} ms` : '-', '', rttTip);
+    setCell(c[HOST_COL.sent], h.sent);
+    setCell(c[HOST_COL.recv], h.received);
+    setCell(c[HOST_COL.loss], `${h.loss_pct}%`, h.loss_pct > 0 ? 'text-danger' : 'text-success');
+
+    if (h.last_seen) {
+        setCell(c[HOST_COL.lastSeen], formatTimestamp(h.last_seen), '', h.last_seen);
+    } else if (h.sent > 0) {
+        setCell(c[HOST_COL.lastSeen], 'Never', 'text-danger', 'No reply since monitoring started');
+    } else {
+        setCell(c[HOST_COL.lastSeen], '-');
+    }
+
+    setCell(c[HOST_COL.outages], h.outage_count,
+        h.outage_count > 0 ? 'text-warning' : '',
+        h.outage_count > 0 ? `Longest outage: ${formatDuration(h.longest_outage_s)}` : '');
+
+    if (h.current_outage_s !== null) {
+        setCell(c[HOST_COL.downtime], formatDuration(h.downtime_s), 'text-danger',
+            `Down now for ${formatDuration(h.current_outage_s)} (since ${h.down_since})`);
+    } else if (h.downtime_s > 0) {
+        setCell(c[HOST_COL.downtime], formatDuration(h.downtime_s), '',
+            `Total downtime across ${h.outage_count} outage(s)`);
+    } else {
+        setCell(c[HOST_COL.downtime], '-');
+    }
+}
+
 function renderHostTable(forceRebuild = false) {
     const filter = hostFilterInput.value.toLowerCase();
 
@@ -647,7 +715,7 @@ function renderHostTable(forceRebuild = false) {
     );
 
     if (filteredHosts.length === 0) {
-        hostTableBody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">No hosts loaded. Click "+ Add / Import Hosts" to add targets.</td></tr>`;
+        hostTableBody.innerHTML = `<tr><td colspan="${HOST_TABLE_COLUMNS}" class="text-center text-muted">No hosts loaded. Click "+ Add / Import Hosts" to add targets.</td></tr>`;
         return;
     }
 
@@ -667,20 +735,9 @@ function renderHostTable(forceRebuild = false) {
             if (selectedHostIp === h.ip) tr.classList.add('selected');
             else tr.classList.remove('selected');
 
-            const statusTd = tr.children[0];
-            const rttTd = tr.children[3];
-            const sentTd = tr.children[4];
-            const recvTd = tr.children[5];
-            const lossTd = tr.children[6];
-            const actionTd = tr.children[7];
+            const actionTd = tr.children[HOST_COL.actions];
 
-            statusTd.innerHTML = statusBadgeHtml(h);
-
-            rttTd.textContent = formatRtt(h.rtt_ms, '-');
-            sentTd.textContent = h.sent;
-            recvTd.textContent = h.received;
-            lossTd.className = h.loss_pct > 0 ? 'text-danger' : 'text-success';
-            lossTd.textContent = `${h.loss_pct}%`;
+            updateHostStatCells(tr, h);
 
             const nameInput = tr.querySelector('.table-input-name');
             if (nameInput && document.activeElement !== nameInput) {
@@ -711,9 +768,6 @@ function renderHostTable(forceRebuild = false) {
         tr.setAttribute('data-ip', h.ip);
         if (selectedHostIp === h.ip) tr.classList.add('selected');
 
-        const statusBadge = statusBadgeHtml(h);
-
-        const rttDisplay = formatRtt(h.rtt_ms, '-');
 
         let traceBtnLabel = "Monitor Route";
         let traceBtnClass = "btn-primary";
@@ -726,13 +780,17 @@ function renderHostTable(forceRebuild = false) {
         }
 
         tr.innerHTML = `
-            <td>${statusBadge}</td>
+            <td></td>
             <td><strong>${h.ip}</strong></td>
             <td><input type="text" class="table-input-name" data-ip="${h.ip}" value="${escapeHtml(h.name)}"></td>
-            <td>${rttDisplay}</td>
-            <td>${h.sent}</td>
-            <td>${h.received}</td>
-            <td class="${h.loss_pct > 0 ? 'text-danger' : 'text-success'}">${h.loss_pct}%</td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
             <td>
                 <div class="action-cell">
                     <button class="btn ${traceBtnClass} btn-sm btn-trace" data-ip="${h.ip}">${traceBtnLabel}</button>
@@ -740,6 +798,8 @@ function renderHostTable(forceRebuild = false) {
                 </div>
             </td>
         `;
+
+        updateHostStatCells(tr, h);
 
         const nameInput = tr.querySelector('.table-input-name');
         

@@ -16,6 +16,7 @@ Designed specifically for restricted enterprise Windows environments, **MonitorI
 * **Flexible Target Parser:** Imports raw host lists, DNS hostnames, legacy PingInfoView `.txt` exports, tab/comma-separated strings, and CIDR subnet notations (e.g., `198.51.100.0/28`). Lines that cannot be used are listed back to you with the reason.
 * **Inline Editing & Row Removal:** Edit friendly host names directly inside table inputs, or click `✕` to drop unreachable firewall targets without resetting active packet statistics.
 * **Timestamped Event Log:** Every host outage and recovery (with outage duration), route change, baseline deviation and setting change is recorded with the time it happened, shown in a collapsible strip under the host table, and saved to a daily CSV file in `logs/` for reviews and post-mortems.
+* **Per-Host Outage Tracking:** Last seen, outage count, total and longest downtime, and min/avg/max round-trip time for every host, with the current outage counting up live.
 * **Configurable Down Detection:** A host is only declared down after a set number of consecutive failed pings (default 2, adjustable in the toolbar), so a single dropped packet does not raise an outage.
 * **JSON Profile Persistence:** Save and load custom host groups, ping rates, traceroute intervals and the down threshold (`profiles/*.json`).
 * **Survives Page Refreshes:** Running traceroute slots and interval settings live on the server, so a refreshed page or a second browser tab picks them back up.
@@ -94,6 +95,17 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
   | **Online** | Last ping answered |
   | **Timeout** (amber) | Missed ping(s), but fewer than the **Down After** setting; hover for the count |
   | **Offline** | Reached the **Down After** number of consecutive failures; hover to see when the outage began |
+
+- **Statistics Columns:**
+
+  | Column | Meaning |
+  |---|---|
+  | **RTT** / **Avg** | Last and average round-trip time; hover either for min / avg / max |
+  | **Last Seen** | Time of the most recent reply (date shown if not today). **Never** (red) means no reply since monitoring started |
+  | **Outages** | Times the host went down after having been up; hover for the longest outage |
+  | **Downtime** | Total time down across all outages. Shown in red and counting up while an outage is in progress; hover for the current outage and when it began |
+
+  An outage runs from the first failed ping to the next reply, and only counts once the **Down After** threshold is reached (a single missed ping is not an outage). A host that has never replied is shown as **Never** rather than accumulating downtime. Statistics reset when a profile is loaded or the host list is replaced.
 
 - **Down After (toolbar):** The number of consecutive failed pings (1, 2, 3 or 5) before a host is marked Offline and an outage is logged. The default is 2. At the default 3-second ping interval, an outage is declared about 3–6 seconds after it begins; use 1 for the fastest detection or 3–5 on lossy links. The setting is saved with the profile.
 

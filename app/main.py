@@ -120,6 +120,21 @@ def _new_host_stat(h: HostEntry) -> dict:
         # Wall-clock text of when the current outage began, for the dashboard tooltip
         "down_since": None,
         "ever_online": False,
+        # Wall-clock text of the most recent reply
+        "last_seen": None,
+        # RTT statistics over all replies
+        "rtt_min": None,
+        "rtt_max": None,
+        "rtt_avg": None,
+        "rtt_total": 0,
+        # Outages: a host that was up reaching the down threshold. Durations in seconds;
+        # downtime_s and longest_outage_s include the outage in progress (see ping_payload)
+        "outage_count": 0,
+        "completed_downtime_s": 0.0,
+        "completed_longest_s": 0.0,
+        "current_outage_s": None,
+        "downtime_s": 0.0,
+        "longest_outage_s": 0.0,
     }
 
 
@@ -211,10 +226,19 @@ class AppState:
 
         if result.is_alive:
             stat["received"] += 1
+            stat["last_seen"] = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S")
+            if result.rtt_ms is not None:
+                rtt = result.rtt_ms
+                stat["rtt_total"] += rtt
+                stat["rtt_avg"] = round(stat["rtt_total"] / stat["received"], 1)
+                stat["rtt_min"] = rtt if stat["rtt_min"] is None else min(stat["rtt_min"], rtt)
+                stat["rtt_max"] = rtt if stat["rtt_max"] is None else max(stat["rtt_max"], rtt)
             if stat["status"] == "Offline":
                 if stat["ever_online"]:
-                    outage = format_duration(now - stat["first_failure_at"])
-                    event = ("host_up", "success", f"Host UP after {outage} outage")
+                    duration = now - stat["first_failure_at"]
+                    stat["completed_downtime_s"] += duration
+                    stat["completed_longest_s"] = max(stat["completed_longest_s"], duration)
+                    event = ("host_up", "success", f"Host UP after {format_duration(duration)} outage")
                 else:
                     event = ("host_up", "success", "Host reachable (first reply)")
             stat["status"] = "Online"
@@ -232,6 +256,7 @@ class AppState:
                     started = datetime.fromtimestamp(stat["first_failure_at"])
                     stat["down_since"] = started.strftime("%Y-%m-%d %H:%M:%S")
                     if stat["ever_online"]:
+                        stat["outage_count"] += 1
                         event = ("host_down", "critical",
                                  f"Host DOWN ({stat['consecutive_failures']} failed pings "
                                  f"since {started.strftime('%H:%M:%S')})")
@@ -280,11 +305,23 @@ class AppState:
         }
 
     def ping_payload(self) -> dict:
+        self._refresh_outage_totals()
         return {
             "type": "ping_update",
             "hosts": list(self.host_stats.values()),
             "ping_interval": self.ping_interval,
         }
+
+    def _refresh_outage_totals(self):
+        """Adds any outage in progress to the downtime figures, so they count up live."""
+        now = time.time()
+        for stat in self.host_stats.values():
+            current = None
+            if stat["status"] == "Offline" and stat["ever_online"] and stat["first_failure_at"]:
+                current = round(now - stat["first_failure_at"], 1)
+            stat["current_outage_s"] = current
+            stat["downtime_s"] = round(stat["completed_downtime_s"] + (current or 0), 1)
+            stat["longest_outage_s"] = round(max(stat["completed_longest_s"], current or 0), 1)
 
 
 ws_manager = ConnectionManager()

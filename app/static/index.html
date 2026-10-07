@@ -87,16 +87,20 @@
                                 <th>Status</th>
                                 <th>IP Address</th>
                                 <th>Friendly Name</th>
-                                <th>RTT (ms)</th>
+                                <th title="Last round-trip time">RTT</th>
+                                <th title="Average round-trip time (hover a value for min/max)">Avg</th>
                                 <th>Sent</th>
                                 <th>Recv</th>
                                 <th>Loss %</th>
+                                <th title="Time of the most recent reply">Last Seen</th>
+                                <th title="Times the host went down after being up (hover for the longest)">Outages</th>
+                                <th title="Total time down; red while an outage is in progress">Downtime</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="hostTableBody">
                             <tr>
-                                <td colspan="8" class="text-center text-muted">No hosts loaded. Click "+ Add / Import Hosts" to add targets.</td>
+                                <td colspan="12" class="text-center text-muted">No hosts loaded. Click "+ Add / Import Hosts" to add targets.</td>
                             </tr>
                         </tbody>
                     </table>
