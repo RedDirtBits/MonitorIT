@@ -43,7 +43,7 @@ This document serves as an operational record for tracking errors, unexpected be
     * Sub-millisecond RTTs shown as `<1 ms`.
     * The browser opens only once the server is listening.
   * Launcher renamed from `Launch-MonitorIT.bat` to `LaunchIT.bat`.
-* **Verification Method:** Exercised the engine, API, and WebSocket against a simulated `iphlpapi.dll` (live/dead hosts, rate-limited hop, reroute). Still to verify on the Windows 11 work PC with real targets.
+* **Verification Method:** Exercised the engine, API, and WebSocket against a simulated `iphlpapi.dll` (live/dead hosts, rate-limited hop, reroute). Still to verify on a Windows 11 PC with real targets.
 
 ---
 

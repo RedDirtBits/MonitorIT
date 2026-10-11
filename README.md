@@ -66,7 +66,18 @@ MonitorIT/
 
 ### Option A: Portable (Embedded Python)
 
-If the `python\` folder (Windows embeddable Python with the requirements installed into `python\Lib\site-packages`) is present, no installation is needed:
+MonitorIT runs from a portable Python in a `python\` folder beside `LaunchIT.bat`, so nothing needs installing and no admin rights are needed. The `python\` folder is not in this repository (64 MB of Windows binaries). Set it up once:
+
+1. Download the **Windows embeddable package (64-bit)** for Python 3.14 from [python.org](https://www.python.org/downloads/windows/) and extract it into a `python\` folder inside `MonitorIT\`.
+2. Edit `python\python314._pth`: add a line `Lib\site-packages` and remove the `#` in front of `import site`. (Without this, the embedded Python ignores installed packages.)
+3. Download [`get-pip.py`](https://bootstrap.pypa.io/get-pip.py) into `python\`, then from the `MonitorIT` folder run:
+
+```powershell
+.\python\python.exe python\get-pip.py
+.\python\python.exe -m pip install -r requirements.txt
+```
+
+Then, to run MonitorIT:
 
 1. Double-click `LaunchIT.bat`.
 2. The dashboard opens in your default browser at `http://127.0.0.1:8000` as soon as the server is ready.
@@ -100,6 +111,8 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
 
 ### 1. Host Monitoring & Inline Editing
 
+![Host table with online, offline and never-reached hosts, outage counts and downtime, above the event log](screenshots/MonitorIT-hosts.png)
+
 - **Filter Hosts:** Type IP addresses or names into the search bar at the top of the host table.
 - **Friendly Names:** Click into any **Friendly Name** input box to modify host labels on the fly. Press **Enter** or click away to sync changes.
 - **Remove Dead Targets:** Click the red `✕` icon next to any host row to instantly delete it from the active session.
@@ -126,6 +139,8 @@ To use a different port, change `set "PORT=8000"` near the top of `LaunchIT.bat`
 - **Down After (toolbar):** The number of consecutive failed pings (1, 2, 3 or 5) before a host is marked Offline and an outage is logged. The default is 2. At the default 3-second ping interval, an outage is declared about 3–6 seconds after it begins; use 1 for the fastest detection or 3–5 on lossy links. The setting is saved with the profile.
 
 ### 2. Live Continuous Traceroute
+
+![Two live traceroutes: slot 1 flags hops 3 and 4 that differ from the locked baseline; slot 2 shows grey rate-limited loss at hop 3 and amber real loss from hop 5](screenshots/MonitorIT-routes.png)
 
 - Click **"Monitor Route"** next to any host.
 - Target assigned to **Slot 1** or **Slot 2** in the right drawer panel.
@@ -177,6 +192,8 @@ The **Event Log** strip at the bottom of the host table records what happened an
 If a log file is open in Excel, Windows locks it. Events are then held in memory and written as soon as the file is closed, and the strip shows a warning with the number of unsaved events. To review a log while monitoring is running, open a **copy** of the file, or use **Export CSV**.
 
 ### 4. Adding & Importing Hosts
+
+![The Add / Import Hosts dialog with IP addresses, a comma-separated line and a CIDR block pasted in](screenshots/MonitorIT-import.png)
 
 - Click **"+ Add / Import Hosts"**.
 - Paste target IPs, tabbed lists, or CIDR blocks:
@@ -237,11 +254,11 @@ Profiles are stored as standard JSON files inside the `profiles/` directory:
 }
 ```
 
-- **Backup:** Copy the `profiles/` folder to back up host lists. Profiles other than `sample_profile.json` are deliberately excluded from Git (see [Version Control](#version-control-git)), so Git is **not** a backup for them.
+- **Backup:** Copy the `profiles/` folder to back up host lists. Profiles other than `sample_profile.json` are deliberately excluded from Git (see [Development Notes](#development-notes)), so Git is **not** a backup for them.
 - **Event logs:** The daily CSV files in `logs/` are also excluded from Git and are never deleted automatically. Copy them somewhere safe if you need them for a review, and delete old ones by hand when no longer needed.
 - **Restore:** Paste JSON profiles into `profiles/` and select them from the top bar dropdown menu.
 - **Profile names:** Characters Windows does not allow in filenames (`\ / : * ? " < > |`) are replaced with `_` when saving, and the dashboard shows the name actually used.
-- **Default profile:** `sample_profile.json` is loaded automatically at startup.
+- **Default profile:** `sample_profile.json` is loaded automatically at startup.
 
 ## Running the Tests
 
@@ -309,92 +326,18 @@ Run `python\python.exe tools\build_release.py --list` to see the contents withou
 
 `GETTING-STARTED.html` is the colleagues' guide: what MonitorIT is, how to start it, how to read the screen, and troubleshooting. Update it when something a user needs to know changes.
 
-## Version Control (Git)
+## Development Notes
 
-The project is a **local-only** Git repository (no remote), used to track changes to the app and roll back if something breaks. Commits use the GitHub noreply address `673674+RedDirtBits@users.noreply.github.com`, which is set for this repository only.
-
-### What Is and Isn't Tracked
-
-| Tracked | Ignored (see `.gitignore`) |
-|---|---|
-| `app/` source, `tests/`, `tools/`, launchers, docs, `screenshots/`, `requirements*.txt`, `pytest.ini` | `python/` portable runtime (64 MB of binaries; reinstallable) |
-| `profiles/sample_profile.json` | All other `profiles/*.json` (internal IPs and device names) |
-| `.gitignore` | `logs/` event logs (internal IPs and device names) |
-| | `build/` release zips, `scratch/` experiments, `venv/`, `__pycache__/`, `.pytest_cache/`, editor folders |
-
-### First-Time Setup on a New Machine
-
-If you copy the project folder (including the hidden `.git` folder) to another PC, set the identity and line-ending behavior for this repository once:
-
-```powershell
-cd MonitorIT
-git config user.name "RedDirt"
-git config user.email "673674+RedDirtBits@users.noreply.github.com"
-git config core.autocrlf false
-```
-
-The files use Windows (CRLF) line endings and are stored that way in the repository. `core.autocrlf false` stops Git from converting them, which would otherwise make every line of a file show as changed.
-
-### Everyday Workflow
-
-```powershell
-git status                      # What has changed since the last commit?
-git diff                        # Show the exact line changes
-git add -A                      # Stage all changes (new, modified, deleted files)
-git commit -m "Describe what changed and why"
-git log --oneline               # List commits, newest first
-```
-
-Commit after each working change, so there is always a known-good point to return to. Running `python -m pytest` first (see [Running the Tests](#running-the-tests)) confirms the change didn't break anything.
-
-### Undoing Mistakes
-
-```powershell
-# Throw away uncommitted edits to one file (restore it from the last commit)
-git restore app/main.py
-
-# Throw away ALL uncommitted edits (cannot be undone)
-git restore .
-
-# Unstage a file you added by mistake (keeps your edits)
-git restore --staged app/main.py
-
-# See what a past commit changed
-git show <commit-id>
-
-# Bring back one file as it was in an earlier commit
-git checkout <commit-id> -- app/static/app.js
-
-# Undo a whole commit by adding a new commit that reverses it (history is kept)
-git revert <commit-id>
-```
-
-`<commit-id>` is the short code shown by `git log --oneline` (e.g., `5056c60`).
-
-### Trying Risky Changes on a Branch
-
-```powershell
-git switch -c experiment        # Create and switch to a new branch
-# ...edit, test, commit as usual...
-git switch main                 # Back to the working version (experiment is untouched)
-git merge experiment            # Keep the experiment's changes, or...
-git branch -D experiment        # ...throw the experiment away
-```
-
-### Marking Known-Good Versions
-
-```powershell
-git tag v1.0 -m "Used during maintenance window"
-git tag                         # List tags
-git checkout v1.0 -- .          # Restore every tracked file to that version
-```
-
-### Tracking a New Profile Anyway
-
-Profiles are ignored by default. To version a specific profile that contains nothing sensitive, add an exception line to `.gitignore` below the existing ones:
+- **Line endings:** the project files use Windows (CRLF) line endings and are stored that way in Git. Run `git config core.autocrlf false` after cloning, so Git doesn't convert them (which would make every line of a file show as changed). `LaunchIT.bat` in particular must stay CRLF, or `cmd.exe` can misread its labels.
+- **What isn't tracked** (see `.gitignore`): the `python/` runtime, virtual environments, `build/` release zips, `scratch/` experiments, `logs/` event logs, and every profile except `profiles/sample_profile.json`. Profiles and logs hold internal IP addresses and device names, so they are kept out of version control by design. Git is therefore **not** a backup for your profiles.
+- **Tracking a profile anyway:** to version a profile that contains nothing sensitive, add an exception line to `.gitignore` below the existing ones:
 
 ```gitignore
 !profiles/My_Profile.json
 ```
 
-> **Before ever pushing this repository to GitHub:** the first commit (`c123f8d`) contains two work profiles from before they were ignored. Ignoring a file does not remove it from earlier commits, so those must be scrubbed from history before any push.
+- **Tests first:** run `python -m pytest` before committing (see [Running the Tests](#running-the-tests)).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
