@@ -54,7 +54,6 @@ MonitorIT/
 ├── build_release.bat        # Double-click to build a release zip
 ├── GETTING-STARTED.html     # Guide for colleagues, shipped in the release zip
 ├── LaunchIT.bat             # One-click launcher (portable Python or venv)
-├── LEARNING.md              # Learning log: concepts and commands used while building this
 ├── pytest.ini               # Test settings
 ├── README.md                # Project documentation
 ├── requirements.txt         # Python dependencies
