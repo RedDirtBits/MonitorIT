@@ -36,3 +36,6 @@ build/
 
 # Throwaway experiments (e.g. the screenshot demo server)
 scratch/
+
+# Claude Code context for this project: kept locally, not published
+CLAUDE.md
