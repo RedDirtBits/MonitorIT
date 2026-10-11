@@ -1,0 +1,227 @@
+<!doctype html>
+<!-- GETTING-STARTED.html — the guide shipped in the release zip, for colleagues.
+     Uses only the pictures in screenshots\ (fake demo data), so it works from the extracted folder.
+     Styled like the app (same colours as app/static/style.css). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MonitorIT · Getting started</title>
+<style>
+  :root { --bg:#181825; --panel:#1e1e2e; --panel-2:#313244; --border:#45475a; --text:#cdd6f4;
+          --muted:#9399b2; --accent:#89b4fa; --ok:#a6e3a1; --warn:#f9e2af; --bad:#f38ba8;
+          --mono: Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 "Segoe UI", system-ui, sans-serif; }
+  header { background:var(--panel); border-bottom:1px solid var(--border); padding:14px 24px; }
+  header b { font-size:20px; letter-spacing:.5px; color:var(--accent); }
+  header span { color:var(--muted); margin-left:12px; }
+  main { max-width:960px; margin:0 auto; padding:16px 24px 60px; }
+  h1 { font-size:24px; margin:18px 0 6px; }
+  h2 { font-size:18px; margin:32px 0 8px; padding-bottom:4px; border-bottom:1px solid var(--border); }
+  h3 { font-size:15px; margin:20px 0 4px; }
+  a { color:var(--accent); }
+  code { font-family:var(--mono); background:var(--panel-2); padding:1px 5px; border-radius:4px; font-size:13px; }
+  pre { font-family:var(--mono); background:var(--panel-2); border:1px solid var(--border); border-radius:6px;
+        padding:10px 12px; overflow-x:auto; font-size:13px; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 18px; margin:12px 0; }
+  .lead { font-size:16px; }
+  .muted { color:var(--muted); }
+  ol li, ul li { margin:4px 0; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); margin:8px 0; }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:13px; background:var(--panel-2); }
+  th, td { padding:6px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  .note { border-left:3px solid var(--accent); padding:6px 12px; background:var(--panel); margin:12px 0; }
+  .warn { border-left:3px solid var(--warn); padding:6px 12px; background:var(--panel); margin:12px 0; }
+  figure { margin:14px 0; }
+  figure img { max-width:100%; border:1px solid var(--border); border-radius:6px; display:block; }
+  figcaption { color:var(--muted); font-size:13px; margin-top:4px; }
+  /* Status pills, as the app shows them */
+  .pill { font-family:var(--mono); font-size:11px; font-weight:700; padding:1px 6px; border-radius:4px; border:1px solid; }
+  .on { color:var(--ok); border-color:var(--ok); } .to { color:var(--warn); border-color:var(--warn); }
+  .off { color:var(--bad); border-color:var(--bad); } .pend { color:var(--muted); border-color:var(--muted); }
+  .amber { color:var(--warn); font-weight:700; } .grey { color:var(--muted); }
+</style>
+</head>
+<body>
+<header><b>MonitorIT</b><span>Route maintenance &amp; host monitor · Getting started</span></header>
+<main>
+
+<h1>What is MonitorIT?</h1>
+<p class="lead">MonitorIT is a dashboard you keep open during a maintenance window. It pings a list of hosts
+continuously, like PingInfoView, and traces the route to up to two of them every second, like WinMTR, all
+on one screen. It tells you <b>when</b> something went down, for <b>how long</b>, and whether traffic
+<b>took a different path</b>.</p>
+
+<div class="panel">
+<b>The problem it solves.</b> During a change window you usually juggle several tools: a ping monitor
+for "is everything still up?", a WinMTR window or two for "did the route fail over?", and notes for
+"when did it drop and for how long?". It's easy to miss a short outage or a failover while you're
+typing on a switch. MonitorIT puts all of that in one place. It marks route changes with a banner and a
+beep, and writes every outage, recovery and route change, with a timestamp, to a log file you can
+open in Excel afterwards.
+</div>
+
+<figure>
+  <img src="screenshots/MonitorIT-dashboard.png" alt="The MonitorIT dashboard: host table, event log and two live traceroutes">
+  <figcaption>The dashboard: hosts on the left, the event log below them, two live traceroutes on the right.
+  (All addresses in these pictures are made-up examples.)</figcaption>
+</figure>
+
+<h3>What it does</h3>
+<ul>
+  <li><b>Pings every host</b> in your list every 3, 5 or 10 seconds and shows its status, response time,
+      packet loss, when it was last seen, how many outages it had and the total downtime.</li>
+  <li><b>Traces the route</b> to up to two hosts every second, with loss and response time per hop.</li>
+  <li><b>Locks a baseline route</b> before the change and warns you, with a banner and an optional beep,
+      as soon as the path differs from it.</li>
+  <li><b>Logs every event with a timestamp</b> (host down, host up with the outage length, route changed,
+      route back on baseline) to a daily CSV file that opens in Excel.</li>
+  <li><b>Saves host lists as profiles</b>, so you can reload your list for the next window.</li>
+</ul>
+<p class="muted">MonitorIT only sends pings and traceroute probes. It never logs into or changes any device.
+It needs no installation and no admin rights.</p>
+
+<h2>Getting started</h2>
+<ol>
+  <li><b>Extract the zip</b> to a folder you own, e.g. <code>Documents\MonitorIT</code>: right-click the
+      zip → <b>Extract All…</b>. Don't run it from inside the zip.</li>
+  <li><b>Double-click <code>LaunchIT.bat</code>.</b> A black console window opens, then your browser opens
+      the dashboard at <code>http://127.0.0.1:8000</code>. Keep the console window open while you use
+      MonitorIT; <b>closing it stops the app</b>.</li>
+  <li>MonitorIT starts with the <b>sample profile</b> (localhost and a few public DNS servers). The public
+      ones may show Offline if your network blocks ping to the internet. That's expected.</li>
+  <li><b>Add your own hosts:</b> click <b>+ Add / Import Hosts</b> (see <a href="#import">Adding hosts</a>).
+      Untick <b>Append</b> to replace the sample hosts instead of adding to them.</li>
+  <li><b>Save your list:</b> click <b>Save As…</b> and give it a name. Next time, pick it from the
+      <b>Profile</b> list at the top and click <b>Load</b>.</li>
+</ol>
+
+<div class="note">The first time you run it, Windows may show <b>"Windows protected your PC"</b> because
+<code>LaunchIT.bat</code> came from a zip. Click <b>More info → Run anyway</b>. If your laptop doesn't allow
+that, right-click the zip → <b>Properties</b> → tick <b>Unblock</b> → OK, then extract it again.</div>
+
+<h2>Watching hosts</h2>
+<figure>
+  <img src="screenshots/MonitorIT-hosts.png" alt="The host table with online, offline and never-reached hosts, and the event log">
+  <figcaption>One host had a 15-second outage and recovered, one is down right now (its downtime counts up in
+  red), and one has never answered.</figcaption>
+</figure>
+
+<table>
+  <tr><th>Status</th><th>Meaning</th></tr>
+  <tr><td><span class="pill pend">PENDING</span></td><td>Not pinged yet.</td></tr>
+  <tr><td><span class="pill on">ONLINE</span></td><td>The last ping was answered.</td></tr>
+  <tr><td><span class="pill to">TIMEOUT</span></td><td>Missed a ping, but not enough in a row to count as down yet.</td></tr>
+  <tr><td><span class="pill off">OFFLINE</span></td><td>Missed the <b>Down After</b> number of pings in a row. An outage is logged.</td></tr>
+</table>
+
+<ul>
+  <li><b>Down After</b> (toolbar) sets how many failed pings in a row mark a host down. The default is 2,
+      so a single dropped ping doesn't raise an alarm. Use 1 for the fastest detection, or 3–5 on lossy links.</li>
+  <li><b>Outages</b> and <b>Downtime</b> count only for hosts that were up before. A host that has never
+      answered shows <b>Never</b> under Last Seen.</li>
+  <li>Hover over RTT, Avg, Outages or Downtime for more detail (min/avg/max, longest outage, when the
+      current outage began).</li>
+  <li>Click a <b>Friendly Name</b> to rename a host. Click <b>✕</b> to remove one from the list.</li>
+  <li>Type in <b>Filter hosts</b> to find a host in a long list.</li>
+</ul>
+
+<h2>Watching a route</h2>
+<figure>
+  <img src="screenshots/MonitorIT-routes.png" alt="Two live traceroutes: slot 1 has moved off its locked baseline, slot 2 shows hop loss">
+  <figcaption>Slot 1 has failed over: hops 3 and 4 differ from the locked baseline. Slot 2 shows a router
+  that limits its replies (hop 3, grey) and real loss from hop 5 to the destination (amber).</figcaption>
+</figure>
+<ol>
+  <li>Click <b>Monitor Route</b> next to a host. Its traceroute appears in slot 1 (a second host goes in slot 2).</li>
+  <li><b>Before the change</b>, once all hops have answered, click <b>Lock Base</b>. The current route
+      becomes the baseline, shown in the Baseline column.</li>
+  <li>If the route then differs from the baseline, the slot shows <b>PATH CHANGE DETECTED</b>, the hops
+      that moved are highlighted, and the event log records it. When the route returns to the baseline,
+      that's logged too.</li>
+  <li>Turn <b>Audio</b> on (top right) to hear a beep on every route change, even when you're looking at
+      another window.</li>
+  <li><b>Reset Stats</b> restarts that slot's loss counters, e.g. at the start of the window. The baseline is kept.
+      <b>Stop</b> ends the traceroute.</li>
+</ol>
+
+<h3>Reading hop loss</h3>
+<p>Routers answer traceroute probes at low priority and often limit how many replies they send, so a hop
+can show loss while traffic through it is fine. MonitorIT works out which case it is:</p>
+<table>
+  <tr><th>Loss shown as</th><th>Meaning</th></tr>
+  <tr><td><span class="amber">Amber, bold</span></td><td>The loss continues through every later hop to the destination: probably <b>real packet loss</b>.</td></tr>
+  <tr><td><span class="grey">Grey</span></td><td>Loss at this hop only, not at later hops: the router is <b>limiting its replies</b>. Not a problem.</td></tr>
+  <tr><td>Normal</td><td>No loss, or the destination hasn't answered yet, so it can't be judged.</td></tr>
+</table>
+<p class="muted">A hop shown as <code>*</code> didn't answer that probe. A hop that never answers is a router
+set not to reply to traceroute; traffic still passes through it. Missing answers are never reported as
+route changes. Hover over a hop for its full statistics.</p>
+
+<h2>The event log</h2>
+<ul>
+  <li>The strip under the host table lists every event, newest first: <b>Critical</b> (host down, route
+      off baseline), <b>Warning</b> (route changed), <b>Success</b> (host back up, with how long it was
+      down; route back on baseline) and <b>Info</b>.</li>
+  <li>Use the filter to show <b>Alerts only</b>, <b>Hosts</b> or <b>Routes</b>. Click the header to fold the
+      strip away; a red counter then shows new alerts.</li>
+  <li>Every event is also saved to <code>logs\MonitorIT_events_YYYY-MM-DD.csv</code> in the MonitorIT folder,
+      one file per day. It opens in Excel, ready for the change report.</li>
+</ul>
+<div class="warn"><b>Opening a log file in Excel while MonitorIT is running locks it</b>, so new events can't be
+written. They're kept in memory and saved once you close Excel, and the strip shows a warning until then.
+To look at a log during the window, open a <b>copy</b> of the file, or use <b>Export CSV</b>.</div>
+
+<h2 id="import">Adding hosts</h2>
+<figure>
+  <img src="screenshots/MonitorIT-import.png" alt="The Add / Import Hosts dialog with example lines pasted in">
+  <figcaption>Paste one host per line, in any of the formats below.</figcaption>
+</figure>
+<table>
+  <tr><th>You can paste</th><th>Example</th></tr>
+  <tr><td>An IP address, optionally followed by a name</td><td><code>192.0.2.40 Access-Switch-4F</code></td></tr>
+  <tr><td>Comma- or tab-separated lines (e.g. copied from Excel or a PingInfoView list)</td><td><code>192.0.2.41, Access-Switch-5F</code></td></tr>
+  <tr><td>A hostname (looked up once, when you add it)</td><td><code>fileserver01 File Server</code></td></tr>
+  <tr><td>A subnet, up to a /22 (1,022 hosts)</td><td><code>198.51.100.32/29</code></td></tr>
+</table>
+<p>Lines that can't be used (a name that doesn't resolve, a duplicate, an IPv6 address, a subnet larger than
+/22) are listed back to you with the reason. Only IPv4 is supported.</p>
+
+<h2>Keeping things safe</h2>
+<ul>
+  <li>MonitorIT only listens on your own laptop (<code>127.0.0.1</code>); nobody else on the network can
+      reach the dashboard.</li>
+  <li><b>Your profiles and logs contain internal IP addresses and device names.</b> They stay in the
+      <code>profiles</code> and <code>logs</code> folders on your laptop. Don't post them anywhere public.</li>
+  <li>If you pass MonitorIT on, share the <b>original zip</b>, not your own MonitorIT folder (it holds your
+      profiles and logs).</li>
+  <li>Log files are never deleted automatically. Delete old ones from <code>logs</code> when you no longer need them.</li>
+</ul>
+
+<h2>Updating to a new version</h2>
+<ol>
+  <li>Close MonitorIT (close its console window).</li>
+  <li>Extract the new zip to a new folder.</li>
+  <li>Copy your own profiles (the <code>.json</code> files in <code>profiles</code>) and, if you want to
+      keep them, the <code>logs</code> folder from the old folder into the new one.</li>
+  <li>Run the new <code>LaunchIT.bat</code>. Once it works, delete the old folder.</li>
+</ol>
+
+<h2>If something goes wrong</h2>
+<table>
+  <tr><th>What you see</th><th>What to do</th></tr>
+  <tr><td>The console window flashes and closes, or shows an error</td><td>Make sure you extracted the whole zip and are running <code>LaunchIT.bat</code> from the extracted folder. Send a screenshot of the console to whoever gave you MonitorIT.</td></tr>
+  <tr><td>The browser doesn't open</td><td>Open <code>http://127.0.0.1:8000</code> yourself while the console window is open.</td></tr>
+  <tr><td>An error in the console saying <i>"only one usage of each socket address"</i> (error 10048)</td><td>Something is already using port 8000, often MonitorIT itself in another console window. Use that one, or close it first. If it's another program, open <code>LaunchIT.bat</code> in Notepad, change <code>set "PORT=8000"</code> to e.g. <code>8080</code>, and use that number in the address.</td></tr>
+  <tr><td><b>WS Status</b> (top right) says <i>Disconnected</i></td><td>The console window was closed or the app stopped. Start <code>LaunchIT.bat</code> again; the page reconnects by itself.</td></tr>
+  <tr><td>Every host shows Offline</td><td>Check the VPN or network connection. Ping (ICMP) may be blocked between your laptop and those hosts; try one with the Windows <code>ping</code> command.</td></tr>
+  <tr><td>A route keeps changing back and forth</td><td>Some paths share traffic across several links (load balancing), so different routers answer at the same hop on successive traces. Each switch is reported as a change; judge it with the hop list.</td></tr>
+  <tr><td>"⚠ … event(s) not yet saved to disk" in the event log</td><td>A log file is open in Excel. Close it; the events are written straight away.</td></tr>
+</table>
+
+<p class="muted" style="margin-top:30px">MonitorIT runs entirely on your laptop with its own built-in Python;
+nothing needs installing.</p>
+</main>
+</body>
+</html>

@@ -30,3 +30,9 @@ logs/
 
 # pytest
 .pytest_cache/
+
+# Release zips made by tools/build_release.py (share these, don't commit them)
+build/
+
+# Throwaway experiments (e.g. the screenshot demo server)
+scratch/

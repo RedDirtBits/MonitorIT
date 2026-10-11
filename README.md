@@ -7,6 +7,10 @@ Designed specifically for restricted enterprise Windows environments, **MonitorI
 
 > **Platform:** Windows 10/11 only. The ICMP engine depends on `iphlpapi.dll` and will not start on Linux or macOS.
 
+![MonitorIT dashboard: monitored hosts, event log and two live traceroutes, one flagging a change from its locked baseline](screenshots/MonitorIT-dashboard.png)
+
+*Screenshots use made-up documentation addresses (RFC 5737).*
+
 ## Key Features
 
 * **Zero Administrator Privileges Required:** Executes unprivileged ICMP Echo Requests and TTL-restricted traceroute sweeps using Windows C APIs (`IcmpSendEcho`).
@@ -37,13 +41,20 @@ MonitorIT/
 │   ├── open_browser.py      # Opens the dashboard once the server is listening
 │   └── profile_manager.py   # Profile loader, JSON serializer & raw host text parser
 ├── logs/                    # Daily event logs, created on first run (not in Git)
+├── build/                   # Release zips, made by build_release.bat (not in Git)
 ├── profiles/
 │   └── sample_profile.json  # Default profile loaded at startup
 ├── python/                  # Optional portable embedded Python (with packages installed)
+├── screenshots/             # Pictures for README.md and GETTING-STARTED.html (fake data)
 ├── tests/                   # Automated tests (see Running the Tests)
 │   ├── conftest.py          # Simulated iphlpapi.dll + shared test setup
-│   └── test_*.py            # Engine, parser, route logic, hosts, event log, API, route monitor
+│   └── test_*.py            # Engine, parser, route logic, hosts, event log, API, route monitor, release build
+├── tools/
+│   └── build_release.py     # Builds the shareable release zip (see Sharing with Colleagues)
+├── build_release.bat        # Double-click to build a release zip
+├── GETTING-STARTED.html     # Guide for colleagues, shipped in the release zip
 ├── LaunchIT.bat             # One-click launcher (portable Python or venv)
+├── LEARNING.md              # Learning log: concepts and commands used while building this
 ├── pytest.ini               # Test settings
 ├── README.md                # Project documentation
 ├── requirements.txt         # Python dependencies
@@ -234,7 +245,7 @@ Profiles are stored as standard JSON files inside the `profiles/` directory:
 
 ## Running the Tests
 
-The `tests/` folder holds an automated test suite (about 70 tests) that checks MonitorIT's behaviour, including the parts that are easy to break by accident: route comparison that ignores silent hops, per-hop loss classification, the down threshold and outage tracking, event log files, and the localhost security checks. Run it after changing the code and before committing.
+The `tests/` folder holds an automated test suite (about 85 tests) that checks MonitorIT's behaviour, including the parts that are easy to break by accident: route comparison that ignores silent hops, per-hop loss classification, the down threshold and outage tracking, event log files, and the localhost security checks. Run it after changing the code and before committing.
 
 **How it works:** MonitorIT's only Windows-specific part is `iphlpapi.dll`. The tests replace it with a simulated network (live and dead hosts, routers, a rate-limited hop, reroutes) and then run the real application against it. That means the suite runs on any computer, Windows or Linux, and gives the same results every time. Nothing in the tests refers to a real network; all addresses come from the reserved documentation ranges.
 
@@ -272,7 +283,7 @@ python -m pytest tests\test_event_log.py   # One file
 python -m pytest -k outage        # Tests whose names contain "outage"
 ```
 
-A good run ends with a line like `71 passed, 1 skipped` (on Windows the smoke test runs too, so expect `72 passed`). Any `FAILED` line names the test that broke and shows what it expected.
+A good run ends with a line like `83 passed, 1 skipped` on Linux. On Windows the smoke test runs and the release-build tests are skipped (they fake `python.exe` with a shell script), so expect `72 passed, 12 skipped`. Any `FAILED` line names the test that broke and shows what it expected.
 
 The live route-monitor tests (`slow`) take longest because they run real one-second traceroute sweeps.
 
@@ -280,6 +291,23 @@ The live route-monitor tests (`slow`) take longest because they run real one-sec
 
 - **Real network behaviour.** Only the Windows smoke test touches the real ICMP layer, and only against `127.0.0.1`. Testing against real targets on the Windows PC remains the final check.
 - **How the dashboard looks.** The tests check the data the server sends, not the browser display, so layout, tooltips and colours still need a look on screen.
+
+## Sharing with Colleagues (Release Build)
+
+To give MonitorIT to colleagues, build a release zip rather than copying your working folder (which holds your own profiles, logs, tests and Git history).
+
+1. On the Windows PC (where the working `python\` folder is), double-click **`build_release.bat`**.
+2. The zip appears in `build\MonitorIT-YYYY-MM-DD.zip`. Share that file.
+
+What goes in is an **allowlist** in `tools/build_release.py` (`INCLUDE`): the `app\` folder, the portable `python\` folder, `LaunchIT.bat`, `GETTING-STARTED.html`, `screenshots\` and `profiles\sample_profile.json`. Anything not listed stays out, so a new folder can never slip in by accident. Before writing the zip, the script:
+
+- **refuses to build** if a forbidden file would be included (CSV files, event logs, `tests`, `.git`, `CLAUDE.md`, `LEARNING.md`, secrets) or a required file is missing;
+- **leaves out the test packages** (`pytest`, `httpx2` and their helpers, listed in `DEV_PACKAGES`) if they were installed into `python\`;
+- **runs a smoke test**: the bundled Python imports the app from the staged copy, so a broken bundle is caught before it is shared.
+
+Run `python\python.exe tools\build_release.py --list` to see the contents without building. On Linux the script builds but skips the smoke test (it needs `python.exe`).
+
+`GETTING-STARTED.html` is the colleagues' guide: what MonitorIT is, how to start it, how to read the screen, and troubleshooting. Update it when something a user needs to know changes.
 
 ## Version Control (Git)
 
@@ -289,10 +317,10 @@ The project is a **local-only** Git repository (no remote), used to track change
 
 | Tracked | Ignored (see `.gitignore`) |
 |---|---|
-| `app/` source, `tests/`, `LaunchIT.bat`, docs, `requirements*.txt`, `pytest.ini` | `python/` portable runtime (64 MB of binaries; reinstallable) |
+| `app/` source, `tests/`, `tools/`, launchers, docs, `screenshots/`, `requirements*.txt`, `pytest.ini` | `python/` portable runtime (64 MB of binaries; reinstallable) |
 | `profiles/sample_profile.json` | All other `profiles/*.json` (internal IPs and device names) |
-| `.gitignore`, `snapshot_v3.py`, `monitorit_project.ps1` | `logs/` event logs (internal IPs and device names) |
-| | `venv/`, `__pycache__/`, `.pytest_cache/`, `snapshot.md`, editor folders |
+| `.gitignore` | `logs/` event logs (internal IPs and device names) |
+| | `build/` release zips, `scratch/` experiments, `venv/`, `__pycache__/`, `.pytest_cache/`, editor folders |
 
 ### First-Time Setup on a New Machine
 
